@@ -23,8 +23,23 @@ double rad2deg(double x) { return x * 180 / pi(); }
 #define MPH2MPS 0.44704                 // miles per hour to meters per second
 const double V_MAX_MPH = 49;            // miles per hour
 double V_MAX_MPS = V_MAX_MPH * MPH2MPS; // meters per second
-const double TS = 1/50;                 // software timestep
+double A_MAX_MPS2 = 10;                  // meters per second per second
+double J_MAX_MPS2 = 10;                  // meters per second per second
+const double TS = 0.02;                 // software timestep seconds
 const double DIST_MAX = 25;             // distance within which objects are recognized
+const int N_TRAJ_PTS = 50;              // number of trajectory points
+
+/* Sensor fusion indices */
+const struct sensor_fusion_indices {
+  int id = 0;
+  int x = 1;
+  int y = 2;
+  int vx = 3;
+  int vy = 4;
+  int s = 5;
+  int d = 6;
+  int size = 7;
+} SF;
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -245,21 +260,26 @@ int main() {
           //std::cout << sensor_fusion[0] << std::endl;
           //std::cout << sensor_fusion.size() << std::endl;
           
+          /* debug */
+          for (int i = 0; i < sensor_fusion.size(); ++i) {
+            std::cout << sensor_fusion[i] << std::endl;
+          }
+          
           vector<vector<double>> near_objs;
           int num_objs = sensor_fusion.size();
           for (int i = 0; i < num_objs; ++i) {
             // if objects are withing DIST_MAX meters, consider them "near"
-            float obj_x = sensor_fusion[i][1];
-            float obj_y = sensor_fusion[i][2];
-            float dst_x = car_x - obj_x;
-            float dst_y = car_y - obj_y;
-            float dst = sqrt((dst_x*dst_x + dst_y*dst_y));
+            double obj_x = sensor_fusion[i][SF.x];
+            double obj_y = sensor_fusion[i][SF.y];
+            double dst_x = car_x - obj_x;
+            double dst_y = car_y - obj_y;
+            double dst = sqrt((dst_x*dst_x + dst_y*dst_y));
             if (dst < DIST_MAX) {
-              float vel_x = sensor_fusion[i][3];
-              float vel_y = sensor_fusion[i][4];
-              float vel = sqrt(vel_x*vel_x + vel_y*vel_y);
+              double vel_x = sensor_fusion[i][SF.vx];
+              double vel_y = sensor_fusion[i][SF.vy];
+              double vel = sqrt(vel_x*vel_x + vel_y*vel_y);
               vector<double> obj;
-              for (int j = 0; j < sensor_fusion[i].size(); j++) {
+              for (int j = 0; j < SF.size; j++) {
                 obj.push_back(sensor_fusion[i][j]);
               }
               obj.push_back(vel);
@@ -271,7 +291,7 @@ int main() {
           //std::cout << near_objs.size() << std::endl;
           
           /* debug */
-          /*
+          
           int num_near_objs = near_objs.size();
           for (int i = 0; i < num_near_objs; ++i) {
             for (int j = 1; j < near_objs[0].size(); ++j) {
@@ -279,35 +299,55 @@ int main() {
             }
             std::cout << std::endl;
           }
-          */
+          
 
           	json msgJson;
 
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
           
-          float vel_des = V_MAX_MPS;
+          // follow the car in front
+          double vel_des = V_MAX_MPS;
           for (int i = 0; i < near_objs.size(); ++i) {
-            if (near_objs[i][near_objs[i].size()] < vel_des) {
-              vel_des = near_objs[i][near_objs[i].size()];
+            if (near_objs[i][SF.s] - car_s > 0) {
+              if (fabs(car_d - near_objs[i][SF.d]) < 2) {
+                vel_des = near_objs[i][near_objs[i].size()];
+              }
             }
           }
           
           /* debug  */
+          car_speed *= MPH2MPS;
           std::cout << "target velocity: " << vel_des << " meters per second" << std::endl;
+          std::cout << "velocity: " << car_speed << " meters per second" << std::endl;
           
-          double dist_inc = (vel_des)/50;
-          for(int i = 0; i < 50; i++)
+          // control acceleration
+          double delta_v = vel_des - car_speed;
+          std::cout << "dV: " << delta_v << " meters per second" << std::endl;
+          double a = delta_v / TS * N_TRAJ_PTS;
+          double dist_inc = vel_des*TS;
+          
+          /* debug */
+          std::cout << "A: " << a << " meters per second per second" << std::endl;
+          std::cout << "D: " << dist_inc << " meters" << std::endl;
+          if (a > A_MAX_MPS2) {
+            dist_inc = (A_MAX_MPS2*TS + car_speed)*TS;
+          } else if (a < -A_MAX_MPS2) {
+            dist_inc = (car_speed - A_MAX_MPS2*TS)*TS;
+          }
+          
+          
+          for(int i = 0; i < N_TRAJ_PTS; i++)
           {
             /* debug */
             /*
              set next 50 waypoints to center line of right-most lane
              */
-            float next_s = car_s + (dist_inc*i);
-            float next_d = 10;
+            double next_s = car_s + (dist_inc*i);
+            double next_d = 10;
             vector<double> next_xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            float next_x = next_xy[0];
-            float next_y = next_xy[1];
+            double next_x = next_xy[0];
+            double next_y = next_xy[1];
             next_x_vals.push_back(next_x);
             next_y_vals.push_back(next_y);
             
