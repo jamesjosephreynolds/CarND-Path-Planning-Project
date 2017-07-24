@@ -19,6 +19,13 @@ constexpr double pi() { return M_PI; }
 double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
+/* Custom variables */
+#define MPH2MPS 0.44704                 // miles per hour to meters per second
+const double V_MAX_MPH = 49;            // miles per hour
+double V_MAX_MPS = V_MAX_MPH * MPH2MPS; // meters per second
+const double TS = 1/50;                 // software timestep
+const double DIST_MAX = 25;             // distance within which objects are recognized
+
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
 // else the empty string "" will be returned.
@@ -232,16 +239,86 @@ int main() {
 
           	// Sensor Fusion Data, a list of all other cars on the same side of the road.
           	auto sensor_fusion = j[1]["sensor_fusion"];
+          
+          /* debug */
+          //std::cout << sensor_fusion << std::endl;
+          //std::cout << sensor_fusion[0] << std::endl;
+          //std::cout << sensor_fusion.size() << std::endl;
+          
+          vector<vector<double>> near_objs;
+          int num_objs = sensor_fusion.size();
+          for (int i = 0; i < num_objs; ++i) {
+            // if objects are withing DIST_MAX meters, consider them "near"
+            float obj_x = sensor_fusion[i][1];
+            float obj_y = sensor_fusion[i][2];
+            float dst_x = car_x - obj_x;
+            float dst_y = car_y - obj_y;
+            float dst = sqrt((dst_x*dst_x + dst_y*dst_y));
+            if (dst < DIST_MAX) {
+              float vel_x = sensor_fusion[i][3];
+              float vel_y = sensor_fusion[i][4];
+              float vel = sqrt(vel_x*vel_x + vel_y*vel_y);
+              vector<double> obj;
+              for (int j = 0; j < sensor_fusion[i].size(); j++) {
+                obj.push_back(sensor_fusion[i][j]);
+              }
+              obj.push_back(vel);
+              near_objs.push_back(obj);
+            }
+          }
+          
+          /* debug */
+          //std::cout << near_objs.size() << std::endl;
+          
+          /* debug */
+          /*
+          int num_near_objs = near_objs.size();
+          for (int i = 0; i < num_near_objs; ++i) {
+            for (int j = 1; j < near_objs[0].size(); ++j) {
+              std::cout << near_objs[i][j] << " ";
+            }
+            std::cout << std::endl;
+          }
+          */
 
           	json msgJson;
 
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
-
-
-          	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
-          	msgJson["next_x"] = next_x_vals;
-          	msgJson["next_y"] = next_y_vals;
+          
+          float vel_des = V_MAX_MPS;
+          for (int i = 0; i < near_objs.size(); ++i) {
+            if (near_objs[i][near_objs[i].size()] < vel_des) {
+              vel_des = near_objs[i][near_objs[i].size()];
+            }
+          }
+          
+          /* debug  */
+          std::cout << "target velocity: " << vel_des << " meters per second" << std::endl;
+          
+          double dist_inc = (vel_des)/50;
+          for(int i = 0; i < 50; i++)
+          {
+            /* debug */
+            /*
+             set next 50 waypoints to center line of right-most lane
+             */
+            float next_s = car_s + (dist_inc*i);
+            float next_d = 10;
+            vector<double> next_xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            float next_x = next_xy[0];
+            float next_y = next_xy[1];
+            next_x_vals.push_back(next_x);
+            next_y_vals.push_back(next_y);
+            
+            /* debug */
+            //std::cout << "(x, y)[" << i << "]: (" << next_x << ", " << next_y << ")" << std::endl;
+          }
+          
+          // TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+          msgJson["next_x"] = next_x_vals;
+          msgJson["next_y"] = next_y_vals;
+          
 
           	auto msg = "42[\"control\","+ msgJson.dump()+"]";
 
