@@ -261,9 +261,11 @@ int main() {
           //std::cout << sensor_fusion.size() << std::endl;
           
           /* debug */
+          /*
           for (int i = 0; i < sensor_fusion.size(); ++i) {
             std::cout << sensor_fusion[i] << std::endl;
           }
+           */
           
           vector<vector<double>> near_objs;
           int num_objs = sensor_fusion.size();
@@ -275,14 +277,12 @@ int main() {
             double dst_y = car_y - obj_y;
             double dst = sqrt((dst_x*dst_x + dst_y*dst_y));
             if (dst < DIST_MAX) {
-              double vel_x = sensor_fusion[i][SF.vx];
-              double vel_y = sensor_fusion[i][SF.vy];
-              double vel = sqrt(vel_x*vel_x + vel_y*vel_y);
+              // push back is broken up in case additional fields are added
               vector<double> obj;
               for (int j = 0; j < SF.size; j++) {
                 obj.push_back(sensor_fusion[i][j]);
               }
-              obj.push_back(vel);
+              obj.push_back(dst);
               near_objs.push_back(obj);
             }
           }
@@ -291,7 +291,7 @@ int main() {
           //std::cout << near_objs.size() << std::endl;
           
           /* debug */
-          
+          /*
           int num_near_objs = near_objs.size();
           for (int i = 0; i < num_near_objs; ++i) {
             for (int j = 1; j < near_objs[0].size(); ++j) {
@@ -299,7 +299,7 @@ int main() {
             }
             std::cout << std::endl;
           }
-          
+          */
 
           	json msgJson;
 
@@ -312,29 +312,33 @@ int main() {
             if (near_objs[i][SF.s] - car_s > 0) {
               if (fabs(car_d - near_objs[i][SF.d]) < 2) {
                 vel_des = near_objs[i][near_objs[i].size()];
+                std::cout << "Follow car #" << near_objs[i][SF.id] << std::endl;
               }
             }
           }
           
           /* debug  */
-          car_speed *= MPH2MPS;
-          std::cout << "target velocity: " << vel_des << " meters per second" << std::endl;
-          std::cout << "velocity: " << car_speed << " meters per second" << std::endl;
+          //car_speed *= MPH2MPS;
+          //std::cout << "target velocity: " << vel_des << " meters per second" << std::endl;
+          //std::cout << "velocity: " << car_speed << " meters per second" << std::endl;
           
           // control acceleration
           double delta_v = vel_des - car_speed;
-          std::cout << "dV: " << delta_v << " meters per second" << std::endl;
           double a = delta_v / TS * N_TRAJ_PTS;
           double dist_inc = vel_des*TS;
           
           /* debug */
-          std::cout << "A: " << a << " meters per second per second" << std::endl;
-          std::cout << "D: " << dist_inc << " meters" << std::endl;
+          //std::cout << "dV: " << delta_v << " meters per second" << std::endl;
+          //std::cout << "A: " << a << " meters per second per second" << std::endl;
+          //std::cout << "D: " << dist_inc << " meters" << std::endl;
+          
+          /*
           if (a > A_MAX_MPS2) {
             dist_inc = (A_MAX_MPS2*TS + car_speed)*TS;
           } else if (a < -A_MAX_MPS2) {
             dist_inc = (car_speed - A_MAX_MPS2*TS)*TS;
           }
+           */
           
           
           for(int i = 0; i < N_TRAJ_PTS; i++)
