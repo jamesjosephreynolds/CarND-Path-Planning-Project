@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -28,6 +29,7 @@ double J_MAX_MPS2 = 10;                  // meters per second per second
 const double TS = 0.02;                 // software timestep seconds
 const double DIST_MAX = 25;             // distance within which objects are recognized
 const int N_TRAJ_PTS = 50;              // number of trajectory points
+const int NUM_PREV_MAX = 5;            // maximum number of previous trajectory points to use
 
 /* Sensor fusion indices */
 const struct sensor_fusion_indices {
@@ -267,6 +269,38 @@ int main() {
           }
            */
           
+          /* debug */
+          //int cw = ClosestWaypoint(car_x, car_y, map_waypoints_x, map_waypoints_y);
+          std::cout << "Car position (" << car_x << ", " << car_y << ", " << car_s << ")" << std::endl;
+          //std::cout << "Way position (" << map_waypoints_x[cw] << ", " << map_waypoints_y[cw];
+          //std::cout << ", " << map_waypoints_s[cw] << ")" << std::endl;
+           
+          
+          /* debug */
+          int num_prev = previous_path_x.size();
+          if (previous_path_y.size() < num_prev) {
+            num_prev = previous_path_y.size(); // error proofing
+          }
+          std::cout << "=====" << num_prev << " previous points " << std::endl;
+          if (NUM_PREV_MAX < num_prev) {
+            num_prev = NUM_PREV_MAX; // take only a finite subset
+          }
+          
+          for (int i = 0; i < num_prev; ++i) {
+            std::cout << previous_path_x[i] << ", " << previous_path_y[i] << std::endl;
+          }
+          
+          // create a previous_path_s vector
+          vector<double> previous_path_s;
+          for (int i = 0; i < num_prev; ++i) {
+            double x_prev = previous_path_x[i];
+            double y_prev = previous_path_y[i];
+            vector<double> frenet = getFrenet(x_prev, y_prev, car_yaw, map_waypoints_x, map_waypoints_y);
+            previous_path_s.push_back(frenet[0]);
+          }
+          
+          
+          
           vector<vector<double>> near_objs;
           int num_objs = sensor_fusion.size();
           for (int i = 0; i < num_objs; ++i) {
@@ -341,19 +375,64 @@ int main() {
            */
           
           
+          // create a spline to try for smooth driving first
+          tk::spline s_to_x;
+          tk::spline s_to_y;
+          vector<double> s_spline;
+          vector<double> x_spline;
+          vector<double> y_spline;
+          double inc = 25; // distance increment to fit spline
+          int num = 6; // number of points to fit spline
+          double s_init = -1;
+          for (int i = 0; i < num; ++i) {
+            if ((i == 0) && (num_prev > 0)) {
+              for (int j = 0; j < num_prev; ++j) {
+                if (previous_path_s[j] > s_init) {
+                  x_spline.push_back(previous_path_x[j]);
+                  y_spline.push_back(previous_path_y[j]);
+                  s_spline.push_back(previous_path_s[j]);
+                  s_init = previous_path_s[j];
+                }
+              }
+            } else {
+              double s_spline_next = car_s + inc*double(i);
+              if (s_spline_next > s_init) {
+                double d_spline_next = 10;
+                vector<double> xy_spline_next = getXY(s_spline_next, d_spline_next, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+                x_spline.push_back(xy_spline_next[0]);
+                y_spline.push_back(xy_spline_next[1]);
+                s_spline.push_back(s_spline_next);
+                s_init = s_spline_next;
+              }
+            }
+          }
+          
+          for (int i = 0; i < x_spline.size(); ++i) {
+            std::cout << "(x, y, s) (" << x_spline[i] << ", " << y_spline[i] << ", " << s_spline[i] << std::endl;
+          }
+          
+          s_to_x.set_points(s_spline, x_spline);
+          s_to_y.set_points(s_spline, y_spline);
+          
+          
           for(int i = 0; i < N_TRAJ_PTS; i++)
           {
             /* debug */
             /*
              set next 50 waypoints to center line of right-most lane
              */
-            double next_s = car_s + (dist_inc*i);
-            double next_d = 10;
-            vector<double> next_xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            double next_x = next_xy[0];
-            double next_y = next_xy[1];
-            next_x_vals.push_back(next_x);
-            next_y_vals.push_back(next_y);
+            if (i < num_prev) {
+              next_x_vals.push_back(previous_path_x[i]);
+              next_y_vals.push_back(previous_path_y[i]);
+            } else {
+              double next_s = car_s + (dist_inc*i);
+              double next_d = 10;
+              //vector<double> next_xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+              //double next_x = next_xy[0];
+              //double next_y = next_xy[1];
+              next_x_vals.push_back(s_to_x(next_s));
+              next_y_vals.push_back(s_to_y(next_s));
+            }
             
             /* debug */
             //std::cout << "(x, y)[" << i << "]: (" << next_x << ", " << next_y << ")" << std::endl;
