@@ -7,6 +7,7 @@
 #include <vector>
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
+#include "Eigen-3.3/Eigen/LU"
 #include "json.hpp"
 #include "spline.h"
 
@@ -42,6 +43,44 @@ const struct sensor_fusion_indices {
   int d = 6;
   int size = 7;
 } SF;
+
+// quintic polynomial solution (minimum jerk)
+vector<double> JMT(vector< double> start, vector <double> end, double T)
+{
+  /*
+   My quiz solution
+   */
+  
+  double a0 = start[0];
+  double a1 = start[1];
+  double a2 = start[2]*0.5;
+  
+  Eigen::MatrixXd A(3,3);
+  A(0,0) = T*T*T;
+  A(0,1) = T*T*T*T;
+  A(0,2) = T*T*T*T*T;
+  A(1,0) = 3*T*T;
+  A(1,1) = 4*T*T*T;
+  A(1,2) = 5*T*T*T*T;
+  A(2,0) = 6*T;
+  A(2,1) = 12*T*T;
+  A(2,2) = 20*T*T*T;
+  
+  Eigen::VectorXd b(3);
+  b(0) = end[0] - (start[0] + start[1]*T + 0.5*start[2]*T*T);
+  b(1) = end[1] - (start[1] + start[2]*T);
+  b(2) = end[2] - start[2];
+  
+  Eigen::MatrixXd Ainv = A.inverse();
+  
+  Eigen::VectorXd x = Ainv*b;
+  double a3 = x(0);
+  double a4 = x(1);
+  double a5 = x(2);
+  
+  return {a0,a1,a2,a3,a4,a5};
+  
+}
 
 // Checks if the SocketIO event has JSON data.
 // If there is data the JSON object in string format will be returned,
@@ -270,13 +309,58 @@ int main() {
            */
           
           /* debug */
-          //int cw = ClosestWaypoint(car_x, car_y, map_waypoints_x, map_waypoints_y);
-          std::cout << "Car position (" << car_x << ", " << car_y << ", " << car_s << ")" << std::endl;
+          double tgt_lane = 10;
+          int next_waypoint = NextWaypoint(car_x, car_y, car_yaw, map_waypoints_x, map_waypoints_y);
+          std::cout << "next waypoint " << next_waypoint << std::endl;
+          vector<int> near_waypoints;
+          int num_way = 5;
+          if (next_waypoint == 179) {
+            near_waypoints.push_back(177);
+            near_waypoints.push_back(178);
+            near_waypoints.push_back(179);
+            near_waypoints.push_back(180);
+            near_waypoints.push_back(0);
+          } else if ((next_waypoint == 180) || (next_waypoint == 181)) {
+            near_waypoints.push_back(178);
+            near_waypoints.push_back(179);
+            near_waypoints.push_back(180);
+            near_waypoints.push_back(0);
+            near_waypoints.push_back(1);
+          } else if (next_waypoint == 0) {
+            near_waypoints.push_back(179);
+            near_waypoints.push_back(180);
+            near_waypoints.push_back(0);
+            near_waypoints.push_back(1);
+            near_waypoints.push_back(2);
+          } else if (next_waypoint == 1) {
+            near_waypoints.push_back(180);
+            near_waypoints.push_back(0);
+            near_waypoints.push_back(1);
+            near_waypoints.push_back(2);
+            near_waypoints.push_back(3);
+          } else{
+            near_waypoints.push_back(next_waypoint - 2);
+            near_waypoints.push_back(next_waypoint - 1);
+            near_waypoints.push_back(next_waypoint);
+            near_waypoints.push_back(next_waypoint + 1);
+            near_waypoints.push_back(next_waypoint + 2);
+          }
+          
+          std::cout << "waypoints : " << near_waypoints[0] << " " << near_waypoints[1] << " " << near_waypoints[2] << " " << near_waypoints[3] << " " << near_waypoints[4] <<std::endl;
+          for (int i = 0; i < num_way; ++i) {
+            double x = map_waypoints_x[near_waypoints[i]] + map_waypoints_dx[near_waypoints[i]]*tgt_lane;
+            double y = map_waypoints_y[near_waypoints[i]] + map_waypoints_dy[near_waypoints[i]]*tgt_lane;
+            double s = map_waypoints_s[near_waypoints[i]];
+            std::cout << "(x, y, s) (" << x << ", " << y << ", " << s << ")" << std::endl;
+          }
+          
+          //std::cout << "Car position (" << car_x << ", " << car_y << ", " << car_s << ")" << std::endl;
           //std::cout << "Way position (" << map_waypoints_x[cw] << ", " << map_waypoints_y[cw];
           //std::cout << ", " << map_waypoints_s[cw] << ")" << std::endl;
            
           
           /* debug */
+          /*
           int num_prev = previous_path_x.size();
           if (previous_path_y.size() < num_prev) {
             num_prev = previous_path_y.size(); // error proofing
@@ -298,6 +382,7 @@ int main() {
             vector<double> frenet = getFrenet(x_prev, y_prev, car_yaw, map_waypoints_x, map_waypoints_y);
             previous_path_s.push_back(frenet[0]);
           }
+           */
           
           
           
@@ -345,8 +430,9 @@ int main() {
           for (int i = 0; i < near_objs.size(); ++i) {
             if (near_objs[i][SF.s] - car_s > 0) {
               if (fabs(car_d - near_objs[i][SF.d]) < 2) {
-                vel_des = near_objs[i][near_objs[i].size()];
-                std::cout << "Follow car #" << near_objs[i][SF.id] << std::endl;
+                double vel = sqrt(near_objs[i][SF.vx]*near_objs[i][SF.vx] + near_objs[i][SF.vy]*near_objs[i][SF.vy]);
+                vel_des = vel;
+                std::cout << "Follow car #" << near_objs[i][SF.id] << " at " << double(int(10*vel/MPH2MPS))/10 << "MPH" << std::endl;
               }
             }
           }
@@ -376,63 +462,72 @@ int main() {
           
           
           // create a spline to try for smooth driving first
+          // create more waypoints
           tk::spline s_to_x;
           tk::spline s_to_y;
           vector<double> s_spline;
           vector<double> x_spline;
           vector<double> y_spline;
-          double inc = 25; // distance increment to fit spline
-          int num = 6; // number of points to fit spline
-          double s_init = -1;
-          for (int i = 0; i < num; ++i) {
-            if ((i == 0) && (num_prev > 0)) {
-              for (int j = 0; j < num_prev; ++j) {
-                if (previous_path_s[j] > s_init) {
-                  x_spline.push_back(previous_path_x[j]);
-                  y_spline.push_back(previous_path_y[j]);
-                  s_spline.push_back(previous_path_s[j]);
-                  s_init = previous_path_s[j];
-                }
-              }
+          double s = -1;
+          for (int i = 0; i < num_way; ++i) {
+            double x = map_waypoints_x[near_waypoints[i]] + map_waypoints_dx[near_waypoints[i]]*tgt_lane;
+            double y = map_waypoints_y[near_waypoints[i]] + map_waypoints_dy[near_waypoints[i]]*tgt_lane;
+            // handle wrap around case
+            if (map_waypoints_s[near_waypoints[i]] <= s) {
+              s = map_waypoints_s[near_waypoints[i]] + 6945.554;
             } else {
-              double s_spline_next = car_s + inc*double(i);
-              if (s_spline_next > s_init) {
-                double d_spline_next = 10;
-                vector<double> xy_spline_next = getXY(s_spline_next, d_spline_next, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-                x_spline.push_back(xy_spline_next[0]);
-                y_spline.push_back(xy_spline_next[1]);
-                s_spline.push_back(s_spline_next);
-                s_init = s_spline_next;
-              }
+              s = map_waypoints_s[near_waypoints[i]];
             }
+            
+            x_spline.push_back(x);
+            y_spline.push_back(y);
+            s_spline.push_back(s);
           }
+          
+          /* debug */
           
           for (int i = 0; i < x_spline.size(); ++i) {
             std::cout << "(x, y, s) (" << x_spline[i] << ", " << y_spline[i] << ", " << s_spline[i] << std::endl;
           }
+           
           
           s_to_x.set_points(s_spline, x_spline);
           s_to_y.set_points(s_spline, y_spline);
+          /* FIX THIS */
           
+          // jerk minimization
+          double s_f_T = 1;
+          double s_f_s = car_s + car_speed*MPH2MPS*s_f_T;
+          vector<double> s_i = {car_s, 25, 0};
+          vector<double> s_f = {car_s + 25, 25, 0};
+          vector<double> jmt_coeffs = JMT(s_i, s_f, s_f_T);
           
-          for(int i = 0; i < N_TRAJ_PTS; i++)
+          for(int i = 1; i < N_TRAJ_PTS; i++)
           {
             /* debug */
             /*
              set next 50 waypoints to center line of right-most lane
              */
-            if (i < num_prev) {
-              next_x_vals.push_back(previous_path_x[i]);
-              next_y_vals.push_back(previous_path_y[i]);
-            } else {
-              double next_s = car_s + (dist_inc*i);
-              double next_d = 10;
+            //if (i < num_prev) {
+              //next_x_vals.push_back(previous_path_x[i]);
+              //next_y_vals.push_back(previous_path_y[i]);
+            //} else {
+              //double next_s = car_s + (dist_inc*i);
+            double ts = i*TS;
+            double s0 = jmt_coeffs[0];
+            double s1 = jmt_coeffs[1]*ts;
+            double s2 = jmt_coeffs[2]*ts*ts;
+            double s3 = jmt_coeffs[3]*ts*ts*ts;
+            double s4 = jmt_coeffs[4]*ts*ts*ts*ts;
+            double s5 = jmt_coeffs[5]*ts*ts*ts*ts*ts;
+            double next_s = s0 + s1 + s2 + s3 + s4 + s5;
+              double next_d = tgt_lane;
               //vector<double> next_xy = getXY(next_s, next_d, map_waypoints_s, map_waypoints_x, map_waypoints_y);
               //double next_x = next_xy[0];
               //double next_y = next_xy[1];
               next_x_vals.push_back(s_to_x(next_s));
               next_y_vals.push_back(s_to_y(next_s));
-            }
+            //}
             
             /* debug */
             //std::cout << "(x, y)[" << i << "]: (" << next_x << ", " << next_y << ")" << std::endl;
