@@ -258,7 +258,34 @@ int main() {
   	map_waypoints_dx.push_back(d_x);
   	map_waypoints_dy.push_back(d_y);
   }
-
+  
+  int num_upsampled_waypoints = int(max_s*2); // place a waypoint every 0.5m
+  
+  tk::spline upsample_waypoints_s_x;
+  tk::spline upsample_waypoints_s_y;
+  tk::spline upsample_waypoints_s_dx;
+  tk::spline upsample_waypoints_s_dy;
+  
+  upsample_waypoints_s_x.set_points(map_waypoints_s, map_waypoints_x);
+  upsample_waypoints_s_y.set_points(map_waypoints_s, map_waypoints_y);
+  upsample_waypoints_s_dx.set_points(map_waypoints_s, map_waypoints_dx);
+  upsample_waypoints_s_dy.set_points(map_waypoints_s, map_waypoints_dy);
+  
+  vector<double> upsample_waypoints_x;
+  vector<double> upsample_waypoints_y;
+  vector<double> upsample_waypoints_dx;
+  vector<double> upsample_waypoints_dy;
+  
+  for (int i = 0; i < num_upsampled_waypoints; ++i) {
+    double upsample_s = double(i)/2.0;
+    upsample_waypoints_x.push_back(upsample_waypoints_s_x(upsample_s));
+    upsample_waypoints_y.push_back(upsample_waypoints_s_y(upsample_s));
+    upsample_waypoints_dx.push_back(upsample_waypoints_s_dx(upsample_s));
+    upsample_waypoints_dy.push_back(upsample_waypoints_s_dy(upsample_s));
+    /* debug */
+    //std::cout << upsample_s << ", " << upsample_waypoints_x[i] << ", " << upsample_waypoints_y[i] << std::endl;
+  }
+  
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -309,7 +336,7 @@ int main() {
            */
           
           /* debug */
-          double tgt_lane = 10;
+          double tgt_lane = 14;
           int next_waypoint = NextWaypoint(car_x, car_y, car_yaw, map_waypoints_x, map_waypoints_y);
           std::cout << "next waypoint " << next_waypoint << std::endl;
           vector<int> near_waypoints;
@@ -360,8 +387,9 @@ int main() {
            
           
           /* debug */
-          /*
+          
           int num_prev = previous_path_x.size();
+          /*
           if (previous_path_y.size() < num_prev) {
             num_prev = previous_path_y.size(); // error proofing
           }
@@ -369,11 +397,12 @@ int main() {
           if (NUM_PREV_MAX < num_prev) {
             num_prev = NUM_PREV_MAX; // take only a finite subset
           }
-          
+          */
           for (int i = 0; i < num_prev; ++i) {
-            std::cout << previous_path_x[i] << ", " << previous_path_y[i] << std::endl;
+            vector<double> previous_path_s_d = getFrenet(previous_path_x[i], previous_path_y[i], car_yaw, map_waypoints_x, map_waypoints_y);
+            std::cout << previous_path_x[i] << ", " << previous_path_y[i] << ", " << previous_path_s_d[0] << std::endl;
           }
-          
+          /*
           // create a previous_path_s vector
           vector<double> previous_path_s;
           for (int i = 0; i < num_prev; ++i) {
