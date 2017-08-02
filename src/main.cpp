@@ -44,6 +44,72 @@ const struct sensor_fusion_indices {
   int size = 7;
 } SF;
 
+/* Custom classes */
+class Lane
+{
+public:
+  vector<string> status;
+  vector<vector<double>> lines;
+  vector<double> speed;
+  void init(int dimension, double lane_width);
+  void update(vector<vector<double>> sf, double s_ego, double d_ego);
+  Lane();
+};
+
+Lane::Lane(void) {};
+
+void Lane::init(int dimension, double lane_width){
+  vector<string> ini;
+  
+  for (int i = 0; i < dimension; ++i){
+    ini.push_back("open");
+    double left = double(i)*lane_width;
+    double right = double(i+1)*lane_width;
+    vector<double> lr_boundary; // lane boundaries
+    lr_boundary.push_back(left);
+    lr_boundary.push_back(right);
+    this->lines.push_back(lr_boundary);
+    this->speed.push_back(99);
+  }
+  this->status = ini;
+
+}
+
+void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego){
+  
+  int dim = this->status.size();
+  for (int i = 0; i < dim; ++i) {
+    
+    // reset lane status
+    this->status[i] = "open";
+    this->speed[i] = 99;
+    
+    double nearest = 999999;
+    
+    // check each lane for nearby vehicles
+    
+    int num_objs = sf.size();
+    for (int j = 0; j < num_objs; ++j){
+      if (sf[j][SF.d] >= this->lines[i][0]) {
+        if (sf[j][SF.d] <= this->lines[i][1]) {
+          if (fabs(sf[j][SF.s] - s_ego) < 10) {
+            this->status[i] = "blocked";
+            nearest = -999999;
+            this->speed[i] = 0;
+          } else if (((sf[j][SF.s] - s_ego) < nearest) && ((sf[j][SF.s] - s_ego) > 0)) {
+            this->speed[i] = sqrt(sf[j][SF.vx]*sf[j][SF.vx] + sf[j][SF.vy]*sf[j][SF.vy]);
+          }
+        }
+      }
+    }
+    
+    std::cout << "Lane " << i << " is " << this->status[i] << " - " << this->lines[i][0] << "m to " << this->lines[i][1] << "m" << std::endl;
+    std::cout << "     Speed is " << this->speed[i]/MPH2MPS << " MPH" << std::endl;
+  }
+}
+
+
+
 
 // quintic polynomial solution (minimum jerk)
 vector<double> JMT(vector< double> start, vector <double> end, double T)
@@ -232,6 +298,12 @@ int main() {
   vector<double> map_waypoints_s;
   vector<double> map_waypoints_dx;
   vector<double> map_waypoints_dy;
+  
+  /* 
+   instance of custom class Lane to describe road
+   */
+  Lane lane;
+  lane.init(3, 4); //3 lanes, 4m wide
 
   // Waypoint map to read from
   string map_file_ = "../data/highway_map.csv";
@@ -292,7 +364,7 @@ int main() {
     upsample_waypoints_s.push_back(upsample_s);
   }
   
-  h.onMessage([&upsample_waypoints_x,&upsample_waypoints_y,&upsample_waypoints_s,&upsample_waypoints_dx,&upsample_waypoints_dy,&upsample_waypoints_s_x,&upsample_waypoints_s_y,&upsample_waypoints_s_dx,&upsample_waypoints_s_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&upsample_waypoints_x,&upsample_waypoints_y,&upsample_waypoints_s,&upsample_waypoints_dx,&upsample_waypoints_dy,&upsample_waypoints_s_x,&upsample_waypoints_s_y,&upsample_waypoints_s_dx,&upsample_waypoints_s_dy,&lane](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -350,7 +422,14 @@ int main() {
           /* debug */
           
           /* low speed output to terminal */
-          int loop;
+          static int loop;
+          
+          static vector<double> jmt_d = {car_d, 0, 0, 0, 0, 0};
+          vector<double> d_i;
+          vector<double> d_f;
+          static double t_dt = 1; // time for the current lane change event
+          
+          double tgt_lane = 10;
           
           if (loop >= int(1/TS)) {
             loop = 0;
@@ -370,14 +449,19 @@ int main() {
               curr_lane = 2;
               std::cout << "In left lane!" << std::endl;
             }
+            lane.update(sensor_fusion, car_s, car_d);
+            
+            t_dt = 1;
 
           } else {
             ++loop;
+            t_dt -= TS;
+            
           }
           
           
           
-          double tgt_lane = 14;
+          
           
           double follow_dist = vel_ini*1.1; // 1 second minimum follow distance + hysteresis band
           
@@ -435,14 +519,22 @@ int main() {
           
           pos_fin = vel_fin*s_f_T + pos_ini;
           
-          vector<double> jmt_coeffs;
+          vector<double> jmt_s;
           vector<double> s_i;
           vector<double> s_f;
           
           s_i = {pos_ini, vel_fin, 0};
           s_f = {pos_fin, vel_fin, 0};
-          jmt_coeffs = JMT(s_i, s_f, s_f_T);
+          jmt_s = JMT(s_i, s_f, s_f_T);
+          
+          // jerk minimization in d domain
+          
+          d_i = {car_d, 0, 0};
+          d_f = {tgt_lane, 0, 0};
+          jmt_d = JMT(d_i, d_f, t_dt);
 
+          double next_d;
+          double prev_d;
           
           // merge previous path and new path
           int num_prev = previous_path_x.size();
@@ -463,29 +555,53 @@ int main() {
               // calculate JMT
             
               double ts = i*TS;
-              double s0 = jmt_coeffs[0];
-              double s1 = jmt_coeffs[1]*ts;
-              double s2 = jmt_coeffs[2]*ts*ts;
-              double s3 = jmt_coeffs[3]*ts*ts*ts;
-              double s4 = jmt_coeffs[4]*ts*ts*ts*ts;
-              double s5 = jmt_coeffs[5]*ts*ts*ts*ts*ts;
+              double s0 = jmt_s[0];
+              double s1 = jmt_s[1]*ts;
+              double s2 = jmt_s[2]*ts*ts;
+              double s3 = jmt_s[3]*ts*ts*ts;
+              double s4 = jmt_s[4]*ts*ts*ts*ts;
+              double s5 = jmt_s[5]*ts*ts*ts*ts*ts;
               double next_s = s0 + s1 + s2 + s3 + s4 + s5;
-              double next_d = tgt_lane;
+              
+              double next_d;
+              /*if (ts > t_dt) {
+                next_d = tgt_lane;
+              } else {
+                double d0 = jmt_d[0];
+                double d1 = jmt_d[1]*ts;
+                double d2 = jmt_d[2]*ts*ts;
+                double d3 = jmt_d[3]*ts*ts*ts;
+                double d4 = jmt_d[4]*ts*ts*ts*ts;
+                double d5 = jmt_d[5]*ts*ts*ts*ts*ts;
+                next_d = d0 + d1 + d2 + d3 + d4 + d5;
+              }*/
             
               ts = (i-1)*TS;
-              s0 = jmt_coeffs[0];
-              s1 = jmt_coeffs[1]*ts;
-              s2 = jmt_coeffs[2]*ts*ts;
-              s3 = jmt_coeffs[3]*ts*ts*ts;
-              s4 = jmt_coeffs[4]*ts*ts*ts*ts;
-              s5 = jmt_coeffs[5]*ts*ts*ts*ts*ts;
+              s0 = jmt_s[0];
+              s1 = jmt_s[1]*ts;
+              s2 = jmt_s[2]*ts*ts;
+              s3 = jmt_s[3]*ts*ts*ts;
+              s4 = jmt_s[4]*ts*ts*ts*ts;
+              s5 = jmt_s[5]*ts*ts*ts*ts*ts;
               double prev_s = s0 + s1 + s2 + s3 + s4 + s5;
+              
               double prev_d = tgt_lane;
+              /*if (ts > t_dt) {
+                prev_d = tgt_lane;
+              } else {
+                double d0 = jmt_d[0];
+                double d1 = jmt_d[1]*ts;
+                double d2 = jmt_d[2]*ts*ts;
+                double d3 = jmt_d[3]*ts*ts*ts;
+                double d4 = jmt_d[4]*ts*ts*ts*ts;
+                double d5 = jmt_d[5]*ts*ts*ts*ts*ts;
+                prev_d = d0 + d1 + d2 + d3 + d4 + d5;
+              }*/
             
-              double next_x = upsample_waypoints_s_x(next_s) + upsample_waypoints_s_dx(next_s)*tgt_lane;
-              double next_y = upsample_waypoints_s_y(next_s) + upsample_waypoints_s_dy(next_s)*tgt_lane;
-              double prev_x = upsample_waypoints_s_x(prev_s) + upsample_waypoints_s_dx(prev_s)*tgt_lane;
-              double prev_y = upsample_waypoints_s_y(prev_s) + upsample_waypoints_s_dy(prev_s)*tgt_lane;
+              double next_x = upsample_waypoints_s_x(next_s) + upsample_waypoints_s_dx(next_s)*next_d;
+              double next_y = upsample_waypoints_s_y(next_s) + upsample_waypoints_s_dy(next_s)*next_d;
+              double prev_x = upsample_waypoints_s_x(prev_s) + upsample_waypoints_s_dx(prev_s)*prev_d;
+              double prev_y = upsample_waypoints_s_y(prev_s) + upsample_waypoints_s_dy(prev_s)*prev_d;
               double next_x_delta = next_x_vals[i-1] + (next_x - prev_x);
               double next_y_delta = next_y_vals[i-1] + (next_y - prev_y);
               next_x_vals.push_back(next_x_delta);
