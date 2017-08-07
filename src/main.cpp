@@ -45,12 +45,17 @@ const struct sensor_fusion_indices {
 } SF;
 
 /* Custom classes */
+
+/*
+ A class to keep track of the status of the road:
+ where are the objects, how fast are the moving, etc
+ */
 class Lane
 {
 public:
-  vector<string> status;
-  vector<vector<double>> lines;
-  vector<double> speed;
+  vector<string> status; // text description of the lane status
+  vector<vector<double>> lines; // an array of pairs, containing lane borders in 'd' coordinates
+  vector<double> speed;  // maximum speed of each lane
   void init(int dimension, double lane_width);
   void update(vector<vector<double>> sf, double s_ego, double d_ego);
   Lane();
@@ -61,6 +66,7 @@ Lane::Lane(void) {};
 void Lane::init(int dimension, double lane_width){
   vector<string> ini;
   
+  // initial state: assume no blockage, no speed limitation
   for (int i = 0; i < dimension; ++i){
     ini.push_back("open");
     double left = double(i)*lane_width;
@@ -69,7 +75,7 @@ void Lane::init(int dimension, double lane_width){
     lr_boundary.push_back(left);
     lr_boundary.push_back(right);
     this->lines.push_back(lr_boundary);
-    this->speed.push_back(99);
+    this->speed.push_back(99*MPH2MPS);
   }
   this->status = ini;
 
@@ -82,41 +88,79 @@ void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego){
     
     // reset lane status
     this->status[i] = "open";
-    this->speed[i] = 99;
+    this->speed[i] = 99*MPH2MPS;
     
     double nearest = 999999;
     
     // check each lane for nearby vehicles
-    
     int num_objs = sf.size();
     for (int j = 0; j < num_objs; ++j){
       if (sf[j][SF.d] >= this->lines[i][0]) {
         if (sf[j][SF.d] <= this->lines[i][1]) {
           if (fabs(sf[j][SF.s] - s_ego) < 10) {
+		  
+	    // the ith lane is blocked, no possiblity to switch here
             this->status[i] = "blocked";
             nearest = -999999;
             this->speed[i] = 0;
           } else if (((sf[j][SF.s] - s_ego) < nearest) && ((sf[j][SF.s] - s_ego) > 0)) {
+		  
+	    // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
             this->speed[i] = sqrt(sf[j][SF.vx]*sf[j][SF.vx] + sf[j][SF.vy]*sf[j][SF.vy]);
           }
         }
       }
     }
     
+    /* debug */
     std::cout << "Lane " << i << " is " << this->status[i] << " - " << this->lines[i][0] << "m to " << this->lines[i][1] << "m" << std::endl;
     std::cout << "     Speed is " << this->speed[i]/MPH2MPS << " MPH" << std::endl;
   }
 }
 
+/*
+ A class to determine the optimal behavior of the vehicle
+ */
+class Behavior
+{
+public:
+  string next; // text description of the next action to take
+  void init(void);
+  void update(Lane lane);
+  Behavior();
+};
 
+Behavior::Behavior(void) {};
 
+void Behavior::init(void) {
+  this->next = "KL"; // keep current lane
+}
+
+void Behavior::update(Lane lane, double car_d) {
+  // calculate cost and decide on action
+  /* 
+   cost[0] = cost to maintain lane
+   cost[1] = cost to increase lane (shift right)
+   cost[2] = cost to decrease lane (shift left)
+   */
+  vector<double> cost = {0,0.1,0.1}; // biased against lane change
+	
+  // check if in a boundary lane (far left or far right)
+  int num_lanes = lanes.speed.size();
+  if (car_d < lane.lines[0][1]) {
+    // can't change left
+    cost[2] = 999;
+  }
+  if (car_d > lane.lines[num_lanes-1][0]) {
+    // can't change right
+    cost[1] = 999;
+  }
+	  
+}
 
 // quintic polynomial solution (minimum jerk)
 vector<double> JMT(vector< double> start, vector <double> end, double T)
 {
-  /*
-   My quiz solution
-   */
   
   double a0 = start[0];
   double a1 = start[1];
@@ -301,9 +345,11 @@ int main() {
   
   /* 
    instance of custom class Lane to describe road
+   and ego vehicle behavior
    */
   Lane lane;
   lane.init(3, 4); //3 lanes, 4m wide
+  Behavior behavior;
 
   // Waypoint map to read from
   string map_file_ = "../data/highway_map.csv";
