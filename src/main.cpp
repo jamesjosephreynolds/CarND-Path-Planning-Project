@@ -144,17 +144,27 @@ void Behavior::update(Lane lane, double car_d) {
    cost[2] = cost to decrease lane (shift left)
    */
   vector<double> cost = {0,0.1,0.1}; // biased against lane change
+
+  // identify current lane
+  int num_lanes = lane.speed.size();
+  int curr_lane;
+  for (int i = 0; i < num_lanes; ++i) {
+    if ((car_d >= lane.lines[i][0]) && (car_d <= lane.lines[i][1])) {
+      curr_lane = i;
+    }
+  }
 	
   // check if in a boundary lane (far left or far right)
-  int num_lanes = lanes.speed.size();
-  if (car_d < lane.lines[0][1]) {
+  if (curr_lane == 0) {
     // can't change left
     cost[2] = 999;
   }
-  if (car_d > lane.lines[num_lanes-1][0]) {
+  if (curr_lane == num_lanes-1) {
     // can't change right
     cost[1] = 999;
   }
+	
+	
 	  
 }
 
