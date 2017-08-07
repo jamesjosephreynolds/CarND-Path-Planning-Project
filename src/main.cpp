@@ -154,18 +154,27 @@ void Behavior::update(Lane lane, double car_d) {
     }
   }
 	
-  // check if in a boundary lane (far left or far right)
-  if (curr_lane == 0) {
-    // can't change left
-    cost[2] = 999;
-  }
-  if (curr_lane == num_lanes-1) {
-    // can't change right
-    cost[1] = 999;
+  int num_lanes_right = (num_lanes - 1) - curr_lane;
+  int num_lanes_left = curr_lane;
+	
+  if (num_lanes_right == 0) {
+	  cost[1] = 999;
+  } else if (lane.status[curr_lane+1] == "blocked") {
+	  cost[1] = 999;
+  } else {
+	// do something  
   }
 	
-	
+  if (num_lanes_left == 0) {
+	  cost[2] = 999;
+  } else if (lane.status[curr_lane-1] == "blocked") {
+	  cost[2] = 999;
+  } else {
+	// do something  
+  }
 	  
+  cost[0] +=  fmax(0.0, (V_MAX_MPS - lane.speed[curr_lane]))/V_MAX_MPS;
+	
 }
 
 // quintic polynomial solution (minimum jerk)
