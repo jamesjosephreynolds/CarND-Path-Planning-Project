@@ -519,13 +519,36 @@ int main() {
           double car_s = frenet[0];
           double car_d = frenet[1];
           double vel_ini = car_speed*MPH2MPS;
-		
+	  
+	  /*
+	   First pass tasks
+	   */
 	  static bool init = false;
 		
 	  if (!init) {
 	    behavior.init(car_d);	  
 	  }
           
+	  /*
+	   Extract information from sensor fusion
+	   */
+	   int num_prev = previous_path_x.size();
+	   int traj_end = NUM_PREV_MAX > num_prev ? num_prev : NUM_PREV_MAX;
+	   double car_v_s, car_a_s; // car velocity and accel in s
+	   double car_v_d, car_a_d; // car velocity and accel in d
+	   if (traj_end > 2) {
+	     vector<double> x_prev = {previous_path_x[traj_end-1], previous_path_x[traj_end-2], previous_path_x[traj_end-3]};
+	     vector<double> y_prev = {previous_path_y[traj_end-1], previous_path_y[traj_end-2], previous_path_y[traj_end-3]};
+	     double car_frenet_0 = getFrenet(x_prev[0], y_prev[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+	     double car_frenet_1 = getFrenet(x_prev[1], y_prev[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+	     double car_frenet_2 = getFrenet(x_prev[2], y_prev[2], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+	   } else {
+	     car_v_s = 0.0;
+	     car_a_s = 0.0;
+	     car_v_d = 0.0;
+	     car_a_d = 0.0;
+	   }
+		
 	  /*debug*/
 	  //std::cout << vel_ini << std::endl;
           
@@ -545,7 +568,7 @@ int main() {
           
           /* low speed output to terminal */
           
-          int num_prev = previous_path_x.size();
+          
           
           std::cout << "Previous s" << std::endl;
           if (num_prev > 0) {
