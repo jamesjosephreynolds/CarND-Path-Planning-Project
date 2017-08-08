@@ -28,9 +28,8 @@ double V_MAX_MPS = V_MAX_MPH * MPH2MPS; // meters per second
 double A_MAX_MPS2 = 5;                  // meters per second per second
 double J_MAX_MPS2 = 10;                  // meters per second per second
 const double TS = 0.02;                 // software timestep seconds
-//const double DIST_MAX = 25;             // distance within which objects are recognized
 const int N_TRAJ_PTS = 50;              // number of trajectory points
-const int NUM_PREV_MAX = 5;            // maximum number of previous trajectory points to use
+const int NUM_PREV_MAX = 10;            // maximum number of previous trajectory points to use
 
 /* Sensor fusion indices */
 const struct sensor_fusion_indices {
@@ -113,8 +112,8 @@ void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego){
     }
     
     /* debug */
-    std::cout << "Lane " << i << " is " << this->status[i] << " - " << this->lines[i][0] << "m to " << this->lines[i][1] << "m" << std::endl;
-    std::cout << "     Speed is " << this->speed[i]/MPH2MPS << " MPH" << std::endl;
+    //std::cout << "Lane " << i << " is " << this->status[i] << " - " << this->lines[i][0] << "m to " << this->lines[i][1] << "m" << std::endl;
+    //std::cout << "     Speed is " << this->speed[i]/MPH2MPS << " MPH" << std::endl;
   }
 }
 
@@ -131,11 +130,11 @@ public:
   Behavior();
 };
 
-Behavior::Behavior(void) {};
+Behavior::Behavior(double car_d) {};
 
 void Behavior::init(void) {
   this->next = "KL"; // keep current lane
-  this->target_lane = 6;
+  this->target_lane = car_d;
 }
 
 void Behavior::update(Lane lane, double car_d) {
@@ -161,13 +160,13 @@ void Behavior::update(Lane lane, double car_d) {
     }
   }
   
-  std::cout << "Current lane: " << curr_lane << std::endl;
-	
   int num_lanes_right = (num_lanes - 1) - curr_lane;
   int num_lanes_left = curr_lane;
-	
-  std::cout << "Lanes to the right: " << num_lanes_right << std::endl;
-  std::cout << "Lanes to the left: " << num_lanes_left << std::endl;
+  
+  /* debug */
+  //std::cout << "Current lane: " << curr_lane << std::endl;
+  //std::cout << "Lanes to the right: " << num_lanes_right << std::endl;
+  //std::cout << "Lanes to the left: " << num_lanes_left << std::endl;
   
   if (num_lanes_right == 0) {
 	  cost[1] = 999;
@@ -206,10 +205,11 @@ void Behavior::update(Lane lane, double car_d) {
   }
 	  
   cost[0] +=  fmax(0.0, (V_MAX_MPS - lane.speed[curr_lane]))/V_MAX_MPS;
-	
-  std::cout << "Cost to keep: " << cost[0] << std::endl;
-  std::cout << "Cost to change right: " << cost[1] << std::endl;
-  std::cout << "Cost to change left: " << cost[2] << std::endl;
+
+  /* debug */
+  //std::cout << "Cost to keep: " << cost[0] << std::endl;
+  //std::cout << "Cost to change right: " << cost[1] << std::endl;
+  //std::cout << "Cost to change left: " << cost[2] << std::endl;
   
   if ((cost[1] < cost[2]) && (cost[1] < cost[0])) {
     this->next = "LCR";
@@ -519,8 +519,15 @@ int main() {
           double car_s = frenet[0];
           double car_d = frenet[1];
           double vel_ini = car_speed*MPH2MPS;
+		
+	  static bool init = false;
+		
+	  if (!init) {
+	    behavior.init(car_d);	  
+	  }
           
-          std::cout << vel_ini << std::endl;
+	  /*debug*/
+	  //std::cout << vel_ini << std::endl;
           
           /* debug */
           //std::cout << sensor_fusion << std::endl;
