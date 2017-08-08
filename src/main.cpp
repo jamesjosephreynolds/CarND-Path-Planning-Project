@@ -23,7 +23,7 @@ double rad2deg(double x) { return x * 180 / pi(); }
 
 /* Custom variables */
 #define MPH2MPS 0.44704                 // miles per hour to meters per second
-const double V_MAX_MPH = 49;            // miles per hour
+const double V_MAX_MPH = 47.5;            // miles per hour
 double V_MAX_MPS = V_MAX_MPH * MPH2MPS; // meters per second
 double A_MAX_MPS2 = 5;                  // meters per second per second
 double J_MAX_MPS2 = 10;                  // meters per second per second
@@ -126,7 +126,8 @@ class Behavior
 public:
   string next; // text description of the next action to take
   void init(void);
-  void update(Lane lane);
+  void update(Lane lane, double car_d);
+  double target_lane;
   Behavior();
 };
 
@@ -134,6 +135,7 @@ Behavior::Behavior(void) {};
 
 void Behavior::init(void) {
   this->next = "KL"; // keep current lane
+  this->target_lane = 6;
 }
 
 void Behavior::update(Lane lane, double car_d) {
@@ -143,26 +145,46 @@ void Behavior::update(Lane lane, double car_d) {
    cost[1] = cost to increase lane (shift right)
    cost[2] = cost to decrease lane (shift left)
    */
-  vector<double> cost = {0,0.1,0.1}; // biased against lane change
+  vector<double> cost = {0,0.03,0.03}; // biased against lane change
 
   // identify current lane
   int num_lanes = lane.speed.size();
+  //std::cout << "Number of lanes: " << num_lanes << std::endl;
   int curr_lane;
   for (int i = 0; i < num_lanes; ++i) {
     if ((car_d >= lane.lines[i][0]) && (car_d <= lane.lines[i][1])) {
       curr_lane = i;
+    } else if (car_d < 0.0) {
+      curr_lane = 0;
+    } else if (car_d > num_lanes*4) {
+      curr_lane = num_lanes-1;
     }
   }
+  
+  std::cout << "Current lane: " << curr_lane << std::endl;
 	
   int num_lanes_right = (num_lanes - 1) - curr_lane;
   int num_lanes_left = curr_lane;
 	
+  std::cout << "Lanes to the right: " << num_lanes_right << std::endl;
+  std::cout << "Lanes to the left: " << num_lanes_left << std::endl;
+  
   if (num_lanes_right == 0) {
 	  cost[1] = 999;
   } else if (lane.status[curr_lane+1] == "blocked") {
 	  cost[1] = 999;
   } else {
-	// do something  
+    
+    double loc_cost = 999;
+    for (int i = 1; i <= num_lanes_right; ++i) {
+      double sub_cost;
+      sub_cost = (V_MAX_MPS - lane.speed[curr_lane+i])/V_MAX_MPS;
+      sub_cost = fmax(sub_cost, 0.0);
+      loc_cost = fmin(loc_cost, sub_cost);
+    }
+    
+    cost[1] += loc_cost;
+    
   }
 	
   if (num_lanes_left == 0) {
@@ -170,11 +192,37 @@ void Behavior::update(Lane lane, double car_d) {
   } else if (lane.status[curr_lane-1] == "blocked") {
 	  cost[2] = 999;
   } else {
-	// do something  
+    
+    double loc_cost = 999;
+    for (int i = 1; i <= num_lanes_left; ++i) {
+      double sub_cost;
+      sub_cost = (V_MAX_MPS - lane.speed[curr_lane-i])/V_MAX_MPS;
+      sub_cost = fmax(sub_cost, 0.0);
+      loc_cost = fmin(loc_cost, sub_cost);
+    }
+    
+    cost[2] += loc_cost;
+    
   }
 	  
   cost[0] +=  fmax(0.0, (V_MAX_MPS - lane.speed[curr_lane]))/V_MAX_MPS;
 	
+  std::cout << "Cost to keep: " << cost[0] << std::endl;
+  std::cout << "Cost to change right: " << cost[1] << std::endl;
+  std::cout << "Cost to change left: " << cost[2] << std::endl;
+  
+  if ((cost[1] < cost[2]) && (cost[1] < cost[0])) {
+    this->next = "LCR";
+    this->target_lane = (lane.lines[curr_lane+1][0] + lane.lines[curr_lane+1][1])/2;
+  } else if ((cost[2] < cost[0]) && (cost[2] < cost[1])) {
+    this->next = "LCL";
+    this->target_lane = (lane.lines[curr_lane-1][0] + lane.lines[curr_lane-1][1])/2;
+  } else {
+    this->next = "KL";
+    this->target_lane = (lane.lines[curr_lane][0] + lane.lines[curr_lane][1])/2;
+    
+  }
+  
 }
 
 // quintic polynomial solution (minimum jerk)
@@ -429,7 +477,7 @@ int main() {
     upsample_waypoints_s.push_back(upsample_s);
   }
   
-  h.onMessage([&upsample_waypoints_x,&upsample_waypoints_y,&upsample_waypoints_s,&upsample_waypoints_dx,&upsample_waypoints_dy,&upsample_waypoints_s_x,&upsample_waypoints_s_y,&upsample_waypoints_s_dx,&upsample_waypoints_s_dy,&lane](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&upsample_waypoints_x,&upsample_waypoints_y,&upsample_waypoints_s,&upsample_waypoints_dx,&upsample_waypoints_dy,&upsample_waypoints_s_x,&upsample_waypoints_s_y,&upsample_waypoints_s_dx,&upsample_waypoints_s_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -472,6 +520,8 @@ int main() {
           double car_d = frenet[1];
           double vel_ini = car_speed*MPH2MPS;
           
+          std::cout << vel_ini << std::endl;
+          
           /* debug */
           //std::cout << sensor_fusion << std::endl;
           //std::cout << sensor_fusion[0] << std::endl;
@@ -487,16 +537,31 @@ int main() {
           /* debug */
           
           /* low speed output to terminal */
+          
+          int num_prev = previous_path_x.size();
+          
+          std::cout << "Previous s" << std::endl;
+          if (num_prev > 0) {
+            for (int i = 0; i < num_prev; ++i) {
+              vector<double> s_frenet_prev = getFrenet(previous_path_x[i], previous_path_y[i], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+              double s_prev = s_frenet_prev[0];
+              std::cout << s_prev << ", ";
+            }
+          }
+          
+          std::cout << std::endl;
+          std::cout << std::endl;
+          
           static int loop;
           
           static vector<double> jmt_d = {car_d, 0, 0, 0, 0, 0};
           vector<double> d_i;
           vector<double> d_f;
-          static double t_dt = 1; // time for the current lane change event
           
-          double tgt_lane = 10;
+          double tgt_lane = car_d;
+          static string behavior_old = "KL";
           
-          if (loop >= int(1/TS)) {
+          if (loop >= int(0.5/TS)) {
             loop = 0;
             
             int curr_lane;
@@ -516,16 +581,60 @@ int main() {
             }
             lane.update(sensor_fusion, car_s, car_d);
             
-            t_dt = 1;
+            
+            behavior.update(lane, car_d);
+            if (behavior_old != behavior.next) {
+              std::cout << "Change lanes!" << std::endl;
+              behavior_old = behavior.next;
+            }
+            
 
           } else {
             ++loop;
-            t_dt -= TS;
+            behavior_old = "KL";
+          }
+          
+          vector<double> d_trajectory(50);
+          
+          for (int i = 0; i < 50; ++i) {
             
           }
           
           
+          // open loop d trajectory estimate
+          double max_d_per_sec = 1; // 2 m/sec maximum lateral change
           
+          double d_fin;
+          double d_vel_fin;
+          
+          if ((behavior.target_lane - car_d) > max_d_per_sec) {
+            d_fin = car_d + max_d_per_sec;
+            d_vel_fin = max_d_per_sec;
+          } else if (( behavior.target_lane - car_d) < -max_d_per_sec) {
+            d_fin = car_d - max_d_per_sec;
+            d_vel_fin = -max_d_per_sec;
+          } else {
+            d_fin = behavior.target_lane;
+            d_vel_fin = 0.0;
+          }
+          
+          double d_vel_ini;
+          if (num_prev > 1) {
+            vector<double> d_frenet_0 = getFrenet(previous_path_x[0], previous_path_y[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            double car_d_0 = d_frenet_0[1];
+            vector<double> d_frenet_1 = getFrenet(previous_path_x[1], previous_path_y[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            double car_d_1 = d_frenet_1[1];
+            d_vel_ini = (car_d_1-car_d_0)/TS;
+          } else {
+            d_vel_ini = 0.0;
+          }
+          
+          d_i = {car_d, d_vel_ini, 0};
+          d_f = {d_fin, d_vel_fin, 0};
+          jmt_d = JMT(d_i, d_f, 1);
+            
+          
+
           
           
           double follow_dist = vel_ini*1.1; // 1 second minimum follow distance + hysteresis band
@@ -577,94 +686,107 @@ int main() {
           }
           
           // jerk minimization in s domain
-          double s_f_T = 1;
-          double pos_ini = car_s;
-          double pos_fin;
-          double vel_fin = vel_des;
           
-          pos_fin = vel_fin*s_f_T + pos_ini;
+          
+          /* calculate s trajectory */
+          
+          vector<double> s_trajectory;
+          
+          double s_ini, s_v_ini, s_a_ini;
+          double s_fin, s_v_fin, s_a_fin;
+          double s_a_max = 10;
+          int s_to_fill;
+        
+          if (num_prev > 0) {
+            vector<double> s_frenet_0 = getFrenet(previous_path_x[0], previous_path_y[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            s_ini = s_frenet_0[0];
+            s_v_ini = 0.0;
+            s_a_ini = 0.0;
+            s_to_fill = 49;
+            s_trajectory.push_back(s_frenet_0[0]);
+          } else {
+            vector<double> s_frenet_0 = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            s_ini = s_frenet_0[0];
+            s_v_ini = 0.0;
+            s_a_ini = 0.0;
+            s_to_fill = 49;
+            s_trajectory.push_back(s_frenet_0[0]);
+          }
+          
+          if (vel_des > (s_v_ini + s_a_max)) {
+            s_v_fin = s_v_ini + s_a_max;
+            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
+            s_a_fin = 0.1;
+          } else if (vel_des < (s_v_ini - s_a_max)) {
+            s_v_fin = s_v_ini - s_a_max;
+            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
+            s_a_fin = -0.1;
+          } else {
+            s_v_fin = vel_des;
+            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
+            s_a_fin = 0.1*(s_v_fin-s_v_ini)/fabs(s_v_fin-s_v_ini);
+          }
+          
+          double s_f_T = 1;
           
           vector<double> jmt_s;
           vector<double> s_i;
           vector<double> s_f;
           
-          s_i = {pos_ini, vel_fin, 0};
-          s_f = {pos_fin, vel_fin, 0};
+          s_i = {s_ini, s_v_ini, 0};
+          s_f = {s_fin, s_v_fin, 0};
           jmt_s = JMT(s_i, s_f, s_f_T);
           
-          // jerk minimization in d domain
+          for (int i = 1; i < 50; ++i) {
+            double ts = (i)*TS;
+            double s0 = jmt_s[0];
+            double s1 = jmt_s[1]*ts;
+            double s2 = jmt_s[2]*ts*ts;
+            double s3 = jmt_s[3]*ts*ts*ts;
+            double s4 = jmt_s[4]*ts*ts*ts*ts;
+            double s5 = jmt_s[5]*ts*ts*ts*ts*ts;
+            double next_s = s0 + s1 + s2 + s3 + s4 + s5;
+            //s_trajectory.push_back(next_s);
+          }
           
-          d_i = {car_d, 0, 0};
-          d_f = {tgt_lane, 0, 0};
-          jmt_d = JMT(d_i, d_f, t_dt);
+          double new_vel;
+          if (fabs(vel_ini - vel_des) < 0.001) {
+            new_vel = vel_des;
+          } else if (vel_ini < vel_des){
+            new_vel = vel_ini + 0.001;
+          } else {
+            new_vel = vel_ini - 0.001;
+          }
+          
+          for (int i = 1; i < 50; ++i) {
+            double last_s = s_trajectory[i-1];
+            double new_s = last_s + new_vel*TS;
+            s_trajectory.push_back(new_s);
+          }
 
-          double next_d;
-          double prev_d;
+          static double next_d = 6;
+          static double prev_d = 6;
           
-          // merge previous path and new path
-          int num_prev = previous_path_x.size();
-          
-          
+          std::cout << "Next s" << std::endl;
           for(int i = 0; i < N_TRAJ_PTS; i++)
           {
-          
-            if ((num_prev > 0) && (i == 0)) {
-              // merge with previous path
+            
+            if ((i == 0)&&(num_prev > 0)) {
               next_x_vals.push_back(previous_path_x[0]);
               next_y_vals.push_back(previous_path_y[0]);
             } else if (i == 0) {
-              // use current position as starting point of trajectory
               next_x_vals.push_back(car_x);
               next_y_vals.push_back(car_y);
-            } else {
-              // calculate JMT
+            } else{
+          
+              double next_s = s_trajectory[i];
+              double prev_s = s_trajectory[i-1];
             
-              double ts = i*TS;
-              double s0 = jmt_s[0];
-              double s1 = jmt_s[1]*ts;
-              double s2 = jmt_s[2]*ts*ts;
-              double s3 = jmt_s[3]*ts*ts*ts;
-              double s4 = jmt_s[4]*ts*ts*ts*ts;
-              double s5 = jmt_s[5]*ts*ts*ts*ts*ts;
-              double next_s = s0 + s1 + s2 + s3 + s4 + s5;
-              
-              double next_d;
-              /*if (ts > t_dt) {
-                next_d = tgt_lane;
-              } else {
-                double d0 = jmt_d[0];
-                double d1 = jmt_d[1]*ts;
-                double d2 = jmt_d[2]*ts*ts;
-                double d3 = jmt_d[3]*ts*ts*ts;
-                double d4 = jmt_d[4]*ts*ts*ts*ts;
-                double d5 = jmt_d[5]*ts*ts*ts*ts*ts;
-                next_d = d0 + d1 + d2 + d3 + d4 + d5;
-              }*/
-            
-              ts = (i-1)*TS;
-              s0 = jmt_s[0];
-              s1 = jmt_s[1]*ts;
-              s2 = jmt_s[2]*ts*ts;
-              s3 = jmt_s[3]*ts*ts*ts;
-              s4 = jmt_s[4]*ts*ts*ts*ts;
-              s5 = jmt_s[5]*ts*ts*ts*ts*ts;
-              double prev_s = s0 + s1 + s2 + s3 + s4 + s5;
-              
-              double prev_d = tgt_lane;
-              /*if (ts > t_dt) {
-                prev_d = tgt_lane;
-              } else {
-                double d0 = jmt_d[0];
-                double d1 = jmt_d[1]*ts;
-                double d2 = jmt_d[2]*ts*ts;
-                double d3 = jmt_d[3]*ts*ts*ts;
-                double d4 = jmt_d[4]*ts*ts*ts*ts;
-                double d5 = jmt_d[5]*ts*ts*ts*ts*ts;
-                prev_d = d0 + d1 + d2 + d3 + d4 + d5;
-              }*/
+              std::cout << next_s << ", ";
             
               double next_x = upsample_waypoints_s_x(next_s) + upsample_waypoints_s_dx(next_s)*next_d;
               double next_y = upsample_waypoints_s_y(next_s) + upsample_waypoints_s_dy(next_s)*next_d;
+            
               double prev_x = upsample_waypoints_s_x(prev_s) + upsample_waypoints_s_dx(prev_s)*prev_d;
               double prev_y = upsample_waypoints_s_y(prev_s) + upsample_waypoints_s_dy(prev_s)*prev_d;
               double next_x_delta = next_x_vals[i-1] + (next_x - prev_x);
@@ -672,7 +794,12 @@ int main() {
               next_x_vals.push_back(next_x_delta);
               next_y_vals.push_back(next_y_delta);
             }
+      
+
           }
+          
+          std::cout << std::endl;
+          std::cout << std::endl;
           
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
