@@ -120,4 +120,6 @@ There are several improvements I would have liked to implement, but I spent so m
 
 ## Results
 
+I have captured a video of my vehicle completing one lap, as in the past there have been issues noted running the same code on different machines and operating systems.
+
 [![Whoops, there should be a picture here!](https://img.youtube.com/vi/FIU6CmpPsY0/0.jpg)](https://youtu.be/FIU6CmpPsY0)
