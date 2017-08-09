@@ -114,6 +114,10 @@ There are several improvements I would have liked to implement, but I spent so m
 
 2. The behavior will not match the speed of the lane into which it is shifting.  This was sometimes leading to a collision, so I have given large buffer distances to prevent this.
 
+3. The behavior will not slow down to go around a vehicle.  The only time the vehicle will slow down is according to the vehicle directly in front of it.
+
+4. The trajectory has a very small acceleration to avoid jerk and acceleration issues, but this could be optimized by accelerating within a given path, not just when joining paths.
+
 ## Results
 
 [![Whoops, there should be a picture here!](https://img.youtube.com/vi/FIU6CmpPsY0/0.jpg)](https://youtu.be/FIU6CmpPsY0)
