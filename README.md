@@ -38,7 +38,7 @@ for (int j = 0; j < num_objs; ++j){
           
       if (fabs(s - s_ego) < 10) {
 		  
-	     // the ith lane is blocked, no possiblity to switch here
+        // the ith lane is blocked, no possiblity to switch here
         this->status[i] = "blocked";
         nearest = -999999;
         this->speed[i] = 0;
@@ -46,7 +46,7 @@ for (int j = 0; j < num_objs; ++j){
             
       } else if ((fabs(s - s_ego) < nearest) && ((s - s_ego) > 0)) {
 		  
-	     // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
+        // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
         this->speed[i] = v;
         this->distance[i] = s - s_ego;
         nearest = s - s_ego;
