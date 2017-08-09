@@ -22,14 +22,16 @@ double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
 /* Custom variables */
-#define MPH2MPS 0.44704                 // miles per hour to meters per second
+#define MPH2MPS 0.44704                 // miles per hour to meters per second
+const double TS = 0.02;                // software timestep seconds
+const int N_TRAJ_PTS = int(1/TS);      // corresponds to 1 second time horizon
 const double V_MAX_MPH = 47.5;            // miles per hour
-double V_MAX_MPS = V_MAX_MPH * MPH2MPS; // meters per second
-double A_MAX_MPS2 = 5;                  // meters per second per second
-double J_MAX_MPS2 = 10;                  // meters per second per second
-const double TS = 0.02;                 // software timestep seconds
-const int N_TRAJ_PTS = 50;              // number of trajectory points
-const int NUM_PREV_MAX = 10;            // maximum number of previous trajectory points to use
+double V_MAX= V_MAX_MPH * MPH2MPS; // meters per second
+double A_MAX = 0.01;                  // meters per second per second per loop
+double J_MAX = 0.01;                  // meters per second per second
+double DELTA_V_MAX = A_MAX * TS;
+double DELTA_A_MAX = J_MAX * TS;
+const int NUM_PREV_MAX = 50;            // maximum number of previous trajectory points to use
 
 /* Sensor fusion indices */
 const struct sensor_fusion_indices {
@@ -124,15 +126,15 @@ class Behavior
 {
 public:
   string next; // text description of the next action to take
-  void init(void);
+  void init(double car_d);
   void update(Lane lane, double car_d);
   double target_lane;
   Behavior();
 };
 
-Behavior::Behavior(double car_d) {};
+Behavior::Behavior(void) {};
 
-void Behavior::init(void) {
+void Behavior::init(double car_d) {
   this->next = "KL"; // keep current lane
   this->target_lane = car_d;
 }
@@ -177,7 +179,7 @@ void Behavior::update(Lane lane, double car_d) {
     double loc_cost = 999;
     for (int i = 1; i <= num_lanes_right; ++i) {
       double sub_cost;
-      sub_cost = (V_MAX_MPS - lane.speed[curr_lane+i])/V_MAX_MPS;
+      sub_cost = (V_MAX - lane.speed[curr_lane+i])/V_MAX;
       sub_cost = fmax(sub_cost, 0.0);
       loc_cost = fmin(loc_cost, sub_cost);
     }
@@ -195,7 +197,7 @@ void Behavior::update(Lane lane, double car_d) {
     double loc_cost = 999;
     for (int i = 1; i <= num_lanes_left; ++i) {
       double sub_cost;
-      sub_cost = (V_MAX_MPS - lane.speed[curr_lane-i])/V_MAX_MPS;
+      sub_cost = (V_MAX - lane.speed[curr_lane-i])/V_MAX;
       sub_cost = fmax(sub_cost, 0.0);
       loc_cost = fmin(loc_cost, sub_cost);
     }
@@ -204,7 +206,7 @@ void Behavior::update(Lane lane, double car_d) {
     
   }
 	  
-  cost[0] +=  fmax(0.0, (V_MAX_MPS - lane.speed[curr_lane]))/V_MAX_MPS;
+  cost[0] +=  fmax(0.0, (V_MAX - lane.speed[curr_lane]))/V_MAX;
 
   /* debug */
   //std::cout << "Cost to keep: " << cost[0] << std::endl;
@@ -496,98 +498,80 @@ int main() {
         if (event == "telemetry") {
           // j[1] is the data JSON object
           
-        	// Main car's localization Data
-          	double car_x = j[1]["x"];
-          	double car_y = j[1]["y"];
-          	//double car_s = j[1]["s"];
-          	//double car_d = j[1]["d"];
-          	double car_yaw = j[1]["yaw"];
-          	double car_speed = j[1]["speed"];
-
-          	// Previous path data given to the Planner
-          	auto previous_path_x = j[1]["previous_path_x"];
-          	auto previous_path_y = j[1]["previous_path_y"];
-          	// Previous path's end s and d values 
-          	double end_path_s = j[1]["end_path_s"];
-          	double end_path_d = j[1]["end_path_d"];
-
-          	// Sensor Fusion Data, a list of all other cars on the same side of the road.
-          	auto sensor_fusion = j[1]["sensor_fusion"];
+          // Main car's localization Data
+          double car_x = j[1]["x"];
+          double car_y = j[1]["y"];
+          //double car_s = j[1]["s"];
+          //double car_d = j[1]["d"];
+          double car_yaw = j[1]["yaw"];
+          double car_speed = j[1]["speed"];
+          
+          // Previous path data given to the Planner
+          auto previous_path_x = j[1]["previous_path_x"];
+          auto previous_path_y = j[1]["previous_path_y"];
+          // Previous path's end s and d values
+          double end_path_s = j[1]["end_path_s"];
+          double end_path_d = j[1]["end_path_d"];
+          
+          // Sensor Fusion Data, a list of all other cars on the same side of the road.
+          auto sensor_fusion = j[1]["sensor_fusion"];
           
           // get better Frenet coordinates
           vector<double> frenet = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
           double car_s = frenet[0];
           double car_d = frenet[1];
-          double vel_ini = car_speed*MPH2MPS;
-	  
-	  /*
-	   First pass tasks
-	   */
-	  static bool init = false;
-		
-	  if (!init) {
-	    behavior.init(car_d);	  
-	  }
+          double car_v_s = car_speed*MPH2MPS;
+          double car_v_d = 0.0;
+          double car_a_s = 0.0;
+          double car_a_d = 0.0;
           
-	  /*
-	   Extract information from sensor fusion
-	   */
-	   int num_prev = previous_path_x.size();
-	   int traj_end = NUM_PREV_MAX > num_prev ? num_prev : NUM_PREV_MAX;
-	   double car_v_s, car_a_s; // car velocity and accel in s
-	   double car_v_d, car_a_d; // car velocity and accel in d
-	   if (traj_end > 2) {
-	     vector<double> x_prev = {previous_path_x[traj_end-1], previous_path_x[traj_end-2], previous_path_x[traj_end-3]};
-	     vector<double> y_prev = {previous_path_y[traj_end-1], previous_path_y[traj_end-2], previous_path_y[traj_end-3]};
-	     double car_frenet_0 = getFrenet(x_prev[0], y_prev[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-	     double car_frenet_1 = getFrenet(x_prev[1], y_prev[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-	     double car_frenet_2 = getFrenet(x_prev[2], y_prev[2], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-	   } else {
-	     car_v_s = 0.0;
-	     car_a_s = 0.0;
-	     car_v_d = 0.0;
-	     car_a_d = 0.0;
-	   }
-		
-	  /*debug*/
-	  //std::cout << vel_ini << std::endl;
-          
-          /* debug */
-          //std::cout << sensor_fusion << std::endl;
-          //std::cout << sensor_fusion[0] << std::endl;
-          //std::cout << sensor_fusion.size() << std::endl;
-          
-          /* debug */
           /*
-          for (int i = 0; i < sensor_fusion.size(); ++i) {
-            std::cout << sensor_fusion[i] << std::endl;
-          }
+           First pass tasks
            */
+          static bool init = false;
           
-          /* debug */
+          if (!init) {
+            behavior.init(car_d);
+          }
           
-          /* low speed output to terminal */
-          
-          
-          
-          std::cout << "Previous s" << std::endl;
-          if (num_prev > 0) {
-            for (int i = 0; i < num_prev; ++i) {
-              vector<double> s_frenet_prev = getFrenet(previous_path_x[i], previous_path_y[i], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-              double s_prev = s_frenet_prev[0];
-              std::cout << s_prev << ", ";
-            }
+          /*
+           Extract information from sensor fusion
+           */
+          int num_prev = previous_path_x.size();
+          for (int i = 0; i < num_prev; ++i) {
+            vector<double> car_frenet = getFrenet(previous_path_x[i], previous_path_y[i], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            double car_s_prev = car_frenet[0];
+            std::cout << car_s_prev << ",";
           }
           
           std::cout << std::endl;
-          std::cout << std::endl;
+          
+          int traj_end = NUM_PREV_MAX > num_prev ? num_prev : NUM_PREV_MAX;
+          
+          if (traj_end > 2) {
+            vector<double> x_prev = {previous_path_x[traj_end-1], previous_path_x[traj_end-2], previous_path_x[traj_end-3]};
+            vector<double> y_prev = {previous_path_y[traj_end-1], previous_path_y[traj_end-2], previous_path_y[traj_end-3]};
+            vector<double> car_frenet_0 = getFrenet(x_prev[0], y_prev[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            vector<double> car_frenet_1 = getFrenet(x_prev[1], y_prev[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            vector<double> car_frenet_2 = getFrenet(x_prev[2], y_prev[2], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            
+            double car_s0 = car_frenet_0[0];
+            double car_d0 = car_frenet_0[1];
+            double car_s1 = car_frenet_1[0];
+            double car_d1 = car_frenet_1[1];
+            double car_s2 = car_frenet_2[0];
+            double car_d2 = car_frenet_2[1];
+            
+            car_v_s = (car_s0 - car_s1)/TS;
+            car_v_d = (car_d0 - car_d1)/TS;
+            car_a_s = (car_v_s - (car_s1 - car_s2)/TS)/TS;
+            car_a_d = (car_v_d - (car_d1 - car_d2)/TS)/TS;
+            
+          }
+		
+          std::cout << "Pos: " << car_s << " m, " << "V: " << car_v_s << " m/sec, " << "A: " << car_a_s << " m/sec^2" << std::endl;
           
           static int loop;
-          
-          static vector<double> jmt_d = {car_d, 0, 0, 0, 0, 0};
-          vector<double> d_i;
-          vector<double> d_f;
-          
           double tgt_lane = car_d;
           static string behavior_old = "KL";
           
@@ -624,50 +608,8 @@ int main() {
             behavior_old = "KL";
           }
           
-          vector<double> d_trajectory(50);
           
-          for (int i = 0; i < 50; ++i) {
-            
-          }
-          
-          
-          // open loop d trajectory estimate
-          double max_d_per_sec = 1; // 2 m/sec maximum lateral change
-          
-          double d_fin;
-          double d_vel_fin;
-          
-          if ((behavior.target_lane - car_d) > max_d_per_sec) {
-            d_fin = car_d + max_d_per_sec;
-            d_vel_fin = max_d_per_sec;
-          } else if (( behavior.target_lane - car_d) < -max_d_per_sec) {
-            d_fin = car_d - max_d_per_sec;
-            d_vel_fin = -max_d_per_sec;
-          } else {
-            d_fin = behavior.target_lane;
-            d_vel_fin = 0.0;
-          }
-          
-          double d_vel_ini;
-          if (num_prev > 1) {
-            vector<double> d_frenet_0 = getFrenet(previous_path_x[0], previous_path_y[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            double car_d_0 = d_frenet_0[1];
-            vector<double> d_frenet_1 = getFrenet(previous_path_x[1], previous_path_y[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            double car_d_1 = d_frenet_1[1];
-            d_vel_ini = (car_d_1-car_d_0)/TS;
-          } else {
-            d_vel_ini = 0.0;
-          }
-          
-          d_i = {car_d, d_vel_ini, 0};
-          d_f = {d_fin, d_vel_fin, 0};
-          jmt_d = JMT(d_i, d_f, 1);
-            
-          
-
-          
-          
-          double follow_dist = vel_ini*1.1; // 1 second minimum follow distance + hysteresis band
+          double follow_dist = car_v_s*1.1; // 1 second minimum follow distance + hysteresis band
           
           vector<vector<double>> near_objs;
           int num_objs = sensor_fusion.size();
@@ -696,7 +638,7 @@ int main() {
           	vector<double> next_y_vals;
           
           // follow the car in front
-          double vel_des = V_MAX_MPS;
+          double car_v_s_des = V_MAX;
           
           for (int i = 0; i < near_objs.size(); ++i) {
             double obj_x = near_objs[i][SF.x];
@@ -706,129 +648,76 @@ int main() {
             double obj_d = obj_frenet[1];
             if (obj_s - car_s > 0) {
               if (fabs(car_d - obj_d) < 2) {
-                double vel = (obj_s - car_s)/1.0; // 1 second following distance
-                if (vel < vel_des) {
-                  vel_des = vel;
+                double obj_v_s = (obj_s - car_s)/1.0; // 1 second following distance
+                if (obj_v_s < car_v_s_des) {
+                  car_v_s_des = obj_v_s;
                 }
                 //std::cout << "Follow car #" << near_objs[i][SF.id] << " at " << double(int(10*vel/MPH2MPS))/10 << "MPH" << std::endl;
               }
             }
           }
           
-          // jerk minimization in s domain
           
-          
-          /* calculate s trajectory */
-          
-          vector<double> s_trajectory;
-          
-          double s_ini, s_v_ini, s_a_ini;
-          double s_fin, s_v_fin, s_a_fin;
-          double s_a_max = 10;
-          int s_to_fill;
-        
-          if (num_prev > 0) {
-            vector<double> s_frenet_0 = getFrenet(previous_path_x[0], previous_path_y[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            s_ini = s_frenet_0[0];
-            s_v_ini = 0.0;
-            s_a_ini = 0.0;
-            s_to_fill = 49;
-            s_trajectory.push_back(s_frenet_0[0]);
-          } else {
-            vector<double> s_frenet_0 = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            s_ini = s_frenet_0[0];
-            s_v_ini = 0.0;
-            s_a_ini = 0.0;
-            s_to_fill = 49;
-            s_trajectory.push_back(s_frenet_0[0]);
-          }
-          
-          if (vel_des > (s_v_ini + s_a_max)) {
-            s_v_fin = s_v_ini + s_a_max;
-            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
-            s_a_fin = 0.1;
-          } else if (vel_des < (s_v_ini - s_a_max)) {
-            s_v_fin = s_v_ini - s_a_max;
-            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
-            s_a_fin = -0.1;
-          } else {
-            s_v_fin = vel_des;
-            s_fin = s_ini + (s_v_fin + s_v_ini)/2;
-            s_a_fin = 0.1*(s_v_fin-s_v_ini)/fabs(s_v_fin-s_v_ini);
-          }
-          
-          double s_f_T = 1;
-          
-          vector<double> jmt_s;
-          vector<double> s_i;
-          vector<double> s_f;
-          
-          s_i = {s_ini, s_v_ini, 0};
-          s_f = {s_fin, s_v_fin, 0};
-          jmt_s = JMT(s_i, s_f, s_f_T);
-          
-          for (int i = 1; i < 50; ++i) {
-            double ts = (i)*TS;
-            double s0 = jmt_s[0];
-            double s1 = jmt_s[1]*ts;
-            double s2 = jmt_s[2]*ts*ts;
-            double s3 = jmt_s[3]*ts*ts*ts;
-            double s4 = jmt_s[4]*ts*ts*ts*ts;
-            double s5 = jmt_s[5]*ts*ts*ts*ts*ts;
-            double next_s = s0 + s1 + s2 + s3 + s4 + s5;
-            //s_trajectory.push_back(next_s);
-          }
-          
-          double new_vel;
-          if (fabs(vel_ini - vel_des) < 0.001) {
-            new_vel = vel_des;
-          } else if (vel_ini < vel_des){
-            new_vel = vel_ini + 0.001;
-          } else {
-            new_vel = vel_ini - 0.001;
-          }
-          
-          for (int i = 1; i < 50; ++i) {
-            double last_s = s_trajectory[i-1];
-            double new_s = last_s + new_vel*TS;
-            s_trajectory.push_back(new_s);
-          }
-
-          static double next_d = 6;
-          static double prev_d = 6;
-          
-          std::cout << "Next s" << std::endl;
           for(int i = 0; i < N_TRAJ_PTS; i++)
           {
             
-            if ((i == 0)&&(num_prev > 0)) {
-              next_x_vals.push_back(previous_path_x[0]);
-              next_y_vals.push_back(previous_path_y[0]);
+            if ((i < traj_end)) {
+              // push back previous values
+              next_x_vals.push_back(previous_path_x[i]);
+              next_y_vals.push_back(previous_path_y[i]);
             } else if (i == 0) {
+              // if no previous values, push back current position
               next_x_vals.push_back(car_x);
               next_y_vals.push_back(car_y);
-            } else{
+            } else {
           
-              double next_s = s_trajectory[i];
-              double prev_s = s_trajectory[i-1];
-            
-              std::cout << next_s << ", ";
-            
-              double next_x = upsample_waypoints_s_x(next_s) + upsample_waypoints_s_dx(next_s)*next_d;
-              double next_y = upsample_waypoints_s_y(next_s) + upsample_waypoints_s_dy(next_s)*next_d;
-            
-              double prev_x = upsample_waypoints_s_x(prev_s) + upsample_waypoints_s_dx(prev_s)*prev_d;
-              double prev_y = upsample_waypoints_s_y(prev_s) + upsample_waypoints_s_dy(prev_s)*prev_d;
-              double next_x_delta = next_x_vals[i-1] + (next_x - prev_x);
-              double next_y_delta = next_y_vals[i-1] + (next_y - prev_y);
-              next_x_vals.push_back(next_x_delta);
-              next_y_vals.push_back(next_y_delta);
+              double loc_a_max;
+              double loc_a_min;
+              double loc_v_err;
+              double loc_v_max;
+              double loc_v_min;
+              double loc_v;
+              
+
+                /* 
+                 check if prev accel is at limit 
+                 */
+              
+              loc_v_err = car_v_s_des - car_v_s;
+              
+              loc_a_max = fmin(A_MAX, (car_a_s + DELTA_A_MAX));
+              loc_a_min = fmax(-A_MAX, (car_a_s - DELTA_A_MAX));
+              
+              loc_v_max = fmin(car_v_s + loc_a_max*TS, car_v_s + DELTA_V_MAX);
+              loc_v_min = fmax(car_v_s + loc_a_min*TS, car_v_s - DELTA_V_MAX);
+              
+              if (car_v_s_des > loc_v_max) {
+                loc_v = loc_v_max;
+              } else if (car_v_s_des < loc_v_min) {
+                loc_v = loc_v_min;
+              } else {
+                loc_v = car_v_s_des;
+              }
+              
+              /* update parameters */
+              car_a_s = (loc_v - car_v_s)/TS;
+              car_v_s = loc_v;
+              vector<double> path_prev = getFrenet(next_x_vals[i-1], next_y_vals[i-1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+              double car_s_prev = path_prev[0];
+              std::cout << car_s_prev << ",";
+              double car_s_new = car_s_prev + car_v_s*TS;
+              double car_d_new = tgt_lane;
+              
+              double next_x = upsample_waypoints_s_x(car_s_new) + upsample_waypoints_s_dx(car_s_new)*car_d_new;
+              double next_y = upsample_waypoints_s_y(car_s_new) + upsample_waypoints_s_dy(car_s_new)*car_d_new;
+
+              next_x_vals.push_back(next_x);
+              next_y_vals.push_back(next_y);
             }
       
 
           }
           
-          std::cout << std::endl;
           std::cout << std::endl;
           
           msgJson["next_x"] = next_x_vals;
@@ -882,83 +771,3 @@ int main() {
   }
   h.run();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
