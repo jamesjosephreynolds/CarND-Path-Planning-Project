@@ -106,6 +106,14 @@ if (lane.speed[curr_lane] <= V_MAX) {
 }
 ```
 
+## Desired Improvements
+
+There are several improvements I would have liked to implement, but I spent so much time just getting the driving correct, I abandoned those goals.
+
+1. The behavior will only consider a single lane change.  It will not evaluate the situation two lanes distant.  This can cause the vehicle to sometimes wait for a long time in the left-most or right-most lane, even though the right-most or left-most lane, respectively, may be open. 
+
+2. The behavior will not match the speed of the lane into which it is shifting.  This was sometimes leading to a collision, so I have given large buffer distances to prevent this.
+
 ## Results
 
 [![Whoops, there should be a picture here!](https://img.youtube.com/vi/FIU6CmpPsY0/0.jpg)](https://youtu.be/FIU6CmpPsY0)
