@@ -479,7 +479,7 @@ int main() {
     upsample_waypoints_s.push_back(upsample_s);
   }
   
-  h.onMessage([&upsample_waypoints_x,&upsample_waypoints_y,&upsample_waypoints_s,&upsample_waypoints_dx,&upsample_waypoints_dy,&upsample_waypoints_s_x,&upsample_waypoints_s_y,&upsample_waypoints_s_dx,&upsample_waypoints_s_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&upsample_waypoints_dx,&map_waypoints_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -501,8 +501,8 @@ int main() {
           // Main car's localization Data
           double car_x = j[1]["x"];
           double car_y = j[1]["y"];
-          //double car_s = j[1]["s"];
-          //double car_d = j[1]["d"];
+          double car_s = j[1]["s"];
+          double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
           
@@ -517,62 +517,74 @@ int main() {
           auto sensor_fusion = j[1]["sensor_fusion"];
           
           // get better Frenet coordinates
-          vector<double> frenet = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-          double car_s = frenet[0];
-          double car_d = frenet[1];
-          double car_v_s = car_speed*MPH2MPS;
-          double car_v_d = 0.0;
-          double car_a_s = 0.0;
-          double car_a_d = 0.0;
+          //vector<double> frenet = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+          //double car_s = frenet[0];
+          //double car_d = frenet[1];
           
-          /*
-           First pass tasks
-           */
-          static bool init = false;
-          
-          if (!init) {
-            behavior.init(car_d);
-          }
-          
-          /*
-           Extract information from sensor fusion
-           */
           int num_prev = previous_path_x.size();
-          for (int i = 0; i < num_prev; ++i) {
-            vector<double> car_frenet = getFrenet(previous_path_x[i], previous_path_y[i], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            double car_s_prev = car_frenet[0];
-            std::cout << car_s_prev << ",";
+          
+          double tgt_lane = car_d;
+          
+          // change to m/sec
+          car_speed *= MPH2MPS;
+          
+          vector<double> ptsx;
+          vector<double> ptsy;
+          
+          // reference points
+          vector<double> ref = {car_x, car_y, deg2rad(car_yaw)};
+          
+          if (num_prev < 2) {
+            double prev_car_x = car_x-cos(car_yaw);
+            double prev_car_y = car_y-sin(car_yaw);
+            
+            ptsx.push_back(prev_car_x);
+            ptsx.push_back(car_x);
+            
+            ptsy.push_back(prev_car_y);
+            ptsy.push_back(car_y);
+          } else {
+            ref[0] = previous_path_x[num_prev-1];
+            ref[1] = previous_path_y[num_prev-1];
+            
+            
+            vector<double> ref_prev = {previous_path_x[num_prev-2], previous_path_y[num_prev-2], 0.0};
+            double ref_yaw_prev = atan2(ref[1]-ref_prev[1], ref[0]-ref_prev[0]);
+            ref_prev[2] = ref_yaw_prev;
+            
+            //set future waypoints
+            double s_ahead = 30;
+            vector<double> wp_next;
+            
+            wp_next = getXY(car_s+1*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(wp_next[0]);
+            ptsy.push_back(wp_next[1]);
+            
+            wp_next = getXY(car_s+2*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(wp_next[0]);
+            ptsy.push_back(wp_next[1]);
+            
+            wp_next = getXY(car_s+3*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+            ptsx.push_back(wp_next[0]);
+            ptsy.push_back(wp_next[1]);
+          }
+        
+          int num_spline = ptsx.size();
+          
+          // transform to car x, y from global
+          for (int i = 0; i < num_spline; ++i) {
+            double x_delta = ptsx[i] - ref[0];
+            double y_delta = ptsy[i] - ref[1];
+            
+            ptsx[i] = x_delta*cos(0 - ref[2]) - y_delta*sin(0-ref[2]);
+            ptsy[i] = x_delta*sin(0 - ref[2]) + y_delta*cos(0-ref[2]);
           }
           
-          std::cout << std::endl;
+          tk::spline trajectory;
+          trajectory.set_points(ptsx, ptsy);
           
-          int traj_end = NUM_PREV_MAX > num_prev ? num_prev : NUM_PREV_MAX;
-          
-          if (traj_end > 2) {
-            vector<double> x_prev = {previous_path_x[traj_end-1], previous_path_x[traj_end-2], previous_path_x[traj_end-3]};
-            vector<double> y_prev = {previous_path_y[traj_end-1], previous_path_y[traj_end-2], previous_path_y[traj_end-3]};
-            vector<double> car_frenet_0 = getFrenet(x_prev[0], y_prev[0], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            vector<double> car_frenet_1 = getFrenet(x_prev[1], y_prev[1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            vector<double> car_frenet_2 = getFrenet(x_prev[2], y_prev[2], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-            
-            double car_s0 = car_frenet_0[0];
-            double car_d0 = car_frenet_0[1];
-            double car_s1 = car_frenet_1[0];
-            double car_d1 = car_frenet_1[1];
-            double car_s2 = car_frenet_2[0];
-            double car_d2 = car_frenet_2[1];
-            
-            car_v_s = (car_s0 - car_s1)/TS;
-            car_v_d = (car_d0 - car_d1)/TS;
-            car_a_s = (car_v_s - (car_s1 - car_s2)/TS)/TS;
-            car_a_d = (car_v_d - (car_d1 - car_d2)/TS)/TS;
-            
-          }
-		
-          std::cout << "Pos: " << car_s << " m, " << "V: " << car_v_s << " m/sec, " << "A: " << car_a_s << " m/sec^2" << std::endl;
           
           static int loop;
-          double tgt_lane = car_d;
           static string behavior_old = "KL";
           
           if (loop >= int(0.5/TS)) {
@@ -609,7 +621,7 @@ int main() {
           }
           
           
-          double follow_dist = car_v_s*1.1; // 1 second minimum follow distance + hysteresis band
+          double follow_dist = car_speed*1.1; // 1 second minimum follow distance + hysteresis band
           
           vector<vector<double>> near_objs;
           int num_objs = sensor_fusion.size();
@@ -632,10 +644,7 @@ int main() {
           }
           
 
-          	json msgJson;
 
-          	vector<double> next_x_vals;
-          	vector<double> next_y_vals;
           
           // follow the car in front
           double car_v_s_des = V_MAX;
@@ -643,7 +652,7 @@ int main() {
           for (int i = 0; i < near_objs.size(); ++i) {
             double obj_x = near_objs[i][SF.x];
             double obj_y = near_objs[i][SF.y];
-            vector<double> obj_frenet = getFrenet(obj_x, obj_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
+            vector<double> obj_frenet = getFrenet(obj_x, obj_y, car_yaw, map_waypoints_x, map_waypoints_y);
             double obj_s = obj_frenet[0];
             double obj_d = obj_frenet[1];
             if (obj_s - car_s > 0) {
@@ -657,68 +666,43 @@ int main() {
             }
           }
           
+          json msgJson;
           
-          for(int i = 0; i < N_TRAJ_PTS; i++)
+          vector<double> next_x_vals;
+          vector<double> next_y_vals;
+          
+          for(int i = 0; i < num_prev; i++)
           {
-            
-            if ((i < traj_end)) {
               // push back previous values
               next_x_vals.push_back(previous_path_x[i]);
               next_y_vals.push_back(previous_path_y[i]);
-            } else if (i == 0) {
-              // if no previous values, push back current position
-              next_x_vals.push_back(car_x);
-              next_y_vals.push_back(car_y);
-            } else {
-          
-              double loc_a_max;
-              double loc_a_min;
-              double loc_v_err;
-              double loc_v_max;
-              double loc_v_min;
-              double loc_v;
-              
-
-                /* 
-                 check if prev accel is at limit 
-                 */
-              
-              loc_v_err = car_v_s_des - car_v_s;
-              
-              loc_a_max = fmin(A_MAX, (car_a_s + DELTA_A_MAX));
-              loc_a_min = fmax(-A_MAX, (car_a_s - DELTA_A_MAX));
-              
-              loc_v_max = fmin(car_v_s + loc_a_max*TS, car_v_s + DELTA_V_MAX);
-              loc_v_min = fmax(car_v_s + loc_a_min*TS, car_v_s - DELTA_V_MAX);
-              
-              if (car_v_s_des > loc_v_max) {
-                loc_v = loc_v_max;
-              } else if (car_v_s_des < loc_v_min) {
-                loc_v = loc_v_min;
-              } else {
-                loc_v = car_v_s_des;
-              }
-              
-              /* update parameters */
-              car_a_s = (loc_v - car_v_s)/TS;
-              car_v_s = loc_v;
-              vector<double> path_prev = getFrenet(next_x_vals[i-1], next_y_vals[i-1], car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-              double car_s_prev = path_prev[0];
-              std::cout << car_s_prev << ",";
-              double car_s_new = car_s_prev + car_v_s*TS;
-              double car_d_new = tgt_lane;
-              
-              double next_x = upsample_waypoints_s_x(car_s_new) + upsample_waypoints_s_dx(car_s_new)*car_d_new;
-              double next_y = upsample_waypoints_s_y(car_s_new) + upsample_waypoints_s_dy(car_s_new)*car_d_new;
-
-              next_x_vals.push_back(next_x);
-              next_y_vals.push_back(next_y);
-            }
-      
-
           }
           
-          std::cout << std::endl;
+          // use follow velocity from above
+          double x_des = car_v_s_des;
+          double y_des = trajectory(x_des);
+          double dist = sqrt(x_des*x_des + y_des*y_des);
+          
+          int num_remain = N_TRAJ_PTS - num_prev;
+          for (int i = 1; i < num_remain; ++i) {
+            
+            double N = dist/(TS*car_v_s_des);
+            double x_new = i*x_des/N;
+            double y_new = trajectory(x_new);
+            
+            double x_new_ = x_new; // dummy variable
+            
+            // switch back to global coordinates
+            x_new = x_new*cos(ref[2]) - y_new*sin(ref[2]);
+            y_new = x_new_*sin(ref[2]) + y_new*cos(ref[2]);
+            
+            x_new += ref[0];
+            y_new += ref[1];
+            
+            next_x_vals.push_back(x_new);
+            next_y_vals.push_back(y_new);
+            
+          }
           
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
