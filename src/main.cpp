@@ -27,11 +27,6 @@ const double TS = 0.02;                // software timestep seconds
 const int N_TRAJ_PTS = int(1/TS);      // corresponds to 1 second time horizon
 const double V_MAX_MPH = 49;            // miles per hour
 double V_MAX= V_MAX_MPH * MPH2MPS; // meters per second
-double A_MAX = 0.01;                  // meters per second per second per loop
-double J_MAX = 0.01;                  // meters per second per second
-double DELTA_V_MAX = A_MAX * TS;
-double DELTA_A_MAX = J_MAX * TS;
-const int NUM_PREV_MAX = 50;            // maximum number of previous trajectory points to use
 
 /* Sensor fusion indices */
 const struct sensor_fusion_indices {
@@ -54,35 +49,42 @@ const struct sensor_fusion_indices {
 class Lane
 {
 public:
-  vector<string> status; // text description of the lane status
+  vector<string> status;        // text description of the lane status
   vector<vector<double>> lines; // an array of pairs, containing lane borders in 'd' coordinates
-  vector<double> speed;  // maximum speed of each lane
+  vector<double> speed;         // maximum speed of each lane
   void init(int dimension, double lane_width);
-  void update(vector<vector<double>> sf, double s_ego, double d_ego);
+  void update(vector<vector<double>> sf, double s_ego, double d_ego, int N);
   Lane();
 };
 
 Lane::Lane(void) {};
 
 void Lane::init(int dimension, double lane_width){
+  
   vector<string> ini;
   
-  // initial state: assume no blockage, no speed limitation
+  /*
+   Initial state: assume no blockage, no speed limitation
+   */
   for (int i = 0; i < dimension; ++i){
+    
     ini.push_back("open");
     double left = double(i)*lane_width;
     double right = double(i+1)*lane_width;
-    vector<double> lr_boundary; // lane boundaries
-    lr_boundary.push_back(left);
-    lr_boundary.push_back(right);
-    this->lines.push_back(lr_boundary);
-    this->speed.push_back(99*MPH2MPS);
+    vector<double> lr_boundary;             // lane boundaries
+    lr_boundary.push_back(left);            // left boundary for ith lane
+    lr_boundary.push_back(right);           // right boundard for ith lane
+    this->lines.push_back(lr_boundary);     // boundaries for ith lane
+    this->speed.push_back(99*MPH2MPS);      // maximum speed for ith lane
+    
   }
+  
+  // set init values
   this->status = ini;
 
 }
 
-void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego){
+void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego, int N){
   
   int dim = this->status.size();
   for (int i = 0; i < dim; ++i) {
@@ -95,27 +97,40 @@ void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego){
     
     // check each lane for nearby vehicles
     int num_objs = sf.size();
+    
     for (int j = 0; j < num_objs; ++j){
+      
       if (sf[j][SF.d] >= this->lines[i][0]) {
+        
+        // current object is to the right of the left lane line of ith lane
+        
         if (sf[j][SF.d] <= this->lines[i][1]) {
-          if (fabs(sf[j][SF.s] - s_ego) < 10) {
+          
+          // current object is to the left of the right lane line of ith lane
+          
+          // predict object location in the future
+          double vx = sf[j][SF.vx];
+          double vy = sf[j][SF.vy];
+          double v = sqrt(vx*vx + vy*vy);
+          double s = sf[j][SF.s];
+          s += v*TS*N;
+          
+          if (fabs(s - s_ego) < 20) { // 3 car lengths between
 		  
-	    // the ith lane is blocked, no possiblity to switch here
+	          // the ith lane is blocked, no possiblity to switch here
             this->status[i] = "blocked";
             nearest = -999999;
             this->speed[i] = 0;
+            
           } else if (((sf[j][SF.s] - s_ego) < nearest) && ((sf[j][SF.s] - s_ego) > 0)) {
 		  
-	    // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
+	          // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
             this->speed[i] = sqrt(sf[j][SF.vx]*sf[j][SF.vx] + sf[j][SF.vy]*sf[j][SF.vy]);
+            
           }
         }
       }
     }
-    
-    /* debug */
-    //std::cout << "Lane " << i << " is " << this->status[i] << " - " << this->lines[i][0] << "m to " << this->lines[i][1] << "m" << std::endl;
-    //std::cout << "     Speed is " << this->speed[i]/MPH2MPS << " MPH" << std::endl;
   }
 }
 
@@ -140,7 +155,7 @@ void Behavior::init(double car_d) {
 }
 
 void Behavior::update(Lane lane, double car_d) {
-  // calculate cost and decide on action
+
   /* 
    cost[0] = cost to maintain lane
    cost[1] = cost to increase lane (shift right)
@@ -148,40 +163,60 @@ void Behavior::update(Lane lane, double car_d) {
    */
   vector<double> cost = {0,0.03,0.03}; // biased against lane change
 
-  // identify current lane
+  /*
+   Identify current lane
+   */
   int num_lanes = lane.speed.size();
-  //std::cout << "Number of lanes: " << num_lanes << std::endl;
   int curr_lane;
+  
   for (int i = 0; i < num_lanes; ++i) {
+    
     if ((car_d >= lane.lines[i][0]) && (car_d <= lane.lines[i][1])) {
+      
+      // ego car is currently in the ith lane
       curr_lane = i;
+      
     } else if (car_d < 0.0) {
+      
+      // prevent segmentation errors
       curr_lane = 0;
+      
     } else if (car_d > num_lanes*4) {
+      
+      // prevent segmentation errors
       curr_lane = num_lanes-1;
+      
     }
   }
   
+  /*
+   Check how many lane shifts are possible each direction
+   */
   int num_lanes_right = (num_lanes - 1) - curr_lane;
   int num_lanes_left = curr_lane;
-  
-  /* debug */
-  //std::cout << "Current lane: " << curr_lane << std::endl;
-  //std::cout << "Lanes to the right: " << num_lanes_right << std::endl;
-  //std::cout << "Lanes to the left: " << num_lanes_left << std::endl;
+
   
   if (num_lanes_right == 0) {
+    
+    // right shift not possible (no lane exists)
 	  cost[1] = 999;
+    
   } else if (lane.status[curr_lane+1] == "blocked") {
+    
+    // right shift not possible (obstacle)
 	  cost[1] = 999;
+    
   } else {
     
     double loc_cost = 999;
+    
     for (int i = 1; i <= num_lanes_right; ++i) {
+      
       double sub_cost;
       sub_cost = (V_MAX - lane.speed[curr_lane+i])/V_MAX;
       sub_cost = fmax(sub_cost, 0.0);
       loc_cost = fmin(loc_cost, sub_cost);
+      
     }
     
     cost[1] += loc_cost;
@@ -189,13 +224,21 @@ void Behavior::update(Lane lane, double car_d) {
   }
 	
   if (num_lanes_left == 0) {
+    
+    // efltt shift not possible (no lane exists)
 	  cost[2] = 999;
+    
   } else if (lane.status[curr_lane-1] == "blocked") {
+    
+    // left shift not possible (obstacle)
 	  cost[2] = 999;
+    
   } else {
     
     double loc_cost = 999;
+    
     for (int i = 1; i <= num_lanes_left; ++i) {
+      
       double sub_cost;
       sub_cost = (V_MAX - lane.speed[curr_lane-i])/V_MAX;
       sub_cost = fmax(sub_cost, 0.0);
@@ -207,58 +250,23 @@ void Behavior::update(Lane lane, double car_d) {
   }
 	  
   cost[0] +=  fmax(0.0, (V_MAX - lane.speed[curr_lane]))/V_MAX;
-
-  /* debug */
-  //std::cout << "Cost to keep: " << cost[0] << std::endl;
-  //std::cout << "Cost to change right: " << cost[1] << std::endl;
-  //std::cout << "Cost to change left: " << cost[2] << std::endl;
   
   if ((cost[1] < cost[2]) && (cost[1] < cost[0])) {
+    
     this->next = "LCR";
     this->target_lane = (lane.lines[curr_lane+1][0] + lane.lines[curr_lane+1][1])/2;
+    
   } else if ((cost[2] < cost[0]) && (cost[2] < cost[1])) {
+    
     this->next = "LCL";
     this->target_lane = (lane.lines[curr_lane-1][0] + lane.lines[curr_lane-1][1])/2;
+    
   } else {
+    
     this->next = "KL";
     this->target_lane = (lane.lines[curr_lane][0] + lane.lines[curr_lane][1])/2;
     
   }
-  
-}
-
-// quintic polynomial solution (minimum jerk)
-vector<double> JMT(vector< double> start, vector <double> end, double T)
-{
-  
-  double a0 = start[0];
-  double a1 = start[1];
-  double a2 = start[2]*0.5;
-  
-  Eigen::MatrixXd A(3,3);
-  A(0,0) = T*T*T;
-  A(0,1) = T*T*T*T;
-  A(0,2) = T*T*T*T*T;
-  A(1,0) = 3*T*T;
-  A(1,1) = 4*T*T*T;
-  A(1,2) = 5*T*T*T*T;
-  A(2,0) = 6*T;
-  A(2,1) = 12*T*T;
-  A(2,2) = 20*T*T*T;
-  
-  Eigen::VectorXd b(3);
-  b(0) = end[0] - (start[0] + start[1]*T + 0.5*start[2]*T*T);
-  b(1) = end[1] - (start[1] + start[2]*T);
-  b(2) = end[2] - start[2];
-  
-  Eigen::MatrixXd Ainv = A.inverse();
-  
-  Eigen::VectorXd x = Ainv*b;
-  double a3 = x(0);
-  double a4 = x(1);
-  double a5 = x(2);
-  
-  return {a0,a1,a2,a3,a4,a5};
   
 }
 
@@ -413,11 +421,10 @@ int main() {
   vector<double> map_waypoints_dy;
   
   /* 
-   instance of custom class Lane to describe road
-   and ego vehicle behavior
+   Instances of custom class Lane to describe road
+   and Behavior to decide ego vehicle behavior
    */
   Lane lane;
-  lane.init(3, 4); //3 lanes, 4m wide
   Behavior behavior;
 
   // Waypoint map to read from
@@ -448,37 +455,6 @@ int main() {
   }
   
   
-  /*
-   Define new waypoint maps with high resolution (every 0.5m in the s domain)
-   */
-  
-  int num_upsampled_waypoints = int(max_s*2); // place a waypoint every 0.5m
-  /*
-  tk::spline upsample_waypoints_s_x;
-  tk::spline upsample_waypoints_s_y;
-  tk::spline upsample_waypoints_s_dx;
-  tk::spline upsample_waypoints_s_dy;
-  
-  upsample_waypoints_s_x.set_points(map_waypoints_s, map_waypoints_x);
-  upsample_waypoints_s_y.set_points(map_waypoints_s, map_waypoints_y);
-  upsample_waypoints_s_dx.set_points(map_waypoints_s, map_waypoints_dx);
-  upsample_waypoints_s_dy.set_points(map_waypoints_s, map_waypoints_dy);
-  
-  vector<double> upsample_waypoints_x;
-  vector<double> upsample_waypoints_y;
-  vector<double> upsample_waypoints_s;
-  vector<double> upsample_waypoints_dx;
-  vector<double> upsample_waypoints_dy;
-  
-  for (int i = 0; i < num_upsampled_waypoints; ++i) {
-    double upsample_s = double(i)/2.0;
-    upsample_waypoints_x.push_back(upsample_waypoints_s_x(upsample_s));
-    upsample_waypoints_y.push_back(upsample_waypoints_s_y(upsample_s));
-    upsample_waypoints_dx.push_back(upsample_waypoints_s_dx(upsample_s));
-    upsample_waypoints_dy.push_back(upsample_waypoints_s_dy(upsample_s));
-    upsample_waypoints_s.push_back(upsample_s);
-  }*/
-  
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -496,45 +472,52 @@ int main() {
         string event = j[0].get<string>();
         
         if (event == "telemetry") {
-          // j[1] is the data JSON object
-          
-          // Main car's localization Data
+
+          /*
+           Simulator data
+           */
           double car_x = j[1]["x"];
           double car_y = j[1]["y"];
           double car_s = j[1]["s"];
           double car_d = j[1]["d"];
           double car_yaw = j[1]["yaw"];
           double car_speed = j[1]["speed"];
-          
-          // Previous path data given to the Planner
           auto previous_path_x = j[1]["previous_path_x"];
           auto previous_path_y = j[1]["previous_path_y"];
-          // Previous path's end s and d values
           double end_path_s = j[1]["end_path_s"];
           double end_path_d = j[1]["end_path_d"];
-          
-          // Sensor Fusion Data, a list of all other cars on the same side of the road.
           auto sensor_fusion = j[1]["sensor_fusion"];
           
-          // get better Frenet coordinates
-          //vector<double> frenet = getFrenet(car_x, car_y, car_yaw, upsample_waypoints_x, upsample_waypoints_y);
-          //double car_s = frenet[0];
-          //double car_d = frenet[1];
+          car_speed *= MPH2MPS; // change to m/sec
+          
+          /*
+           Static variables to carry through to following loop
+           */
+          static int loop;
+          static bool init = false;
+          
+          /*
+           Initialize custom classes first time through
+           */
+          if (!init) {
+            behavior.init(car_d);
+            init = true;
+            lane.init(3, 4); //3 lanes, 4m wide
+          }
           
           int num_prev = previous_path_x.size();
-          
-          double tgt_lane = car_d;
-          
-          // change to m/sec
-          car_speed *= MPH2MPS;
-          
           vector<double> ptsx;
           vector<double> ptsy;
           
-          // reference points
+          /*
+           Set current x, y, yaw as reference points for coordinate system transforms
+           */
           vector<double> ref = {car_x, car_y, deg2rad(car_yaw)};
           
           if (num_prev < 2) {
+            
+            // not enough previous path data available, use current position
+            // look backward using the heading
             double prev_car_x = car_x-cos(car_yaw);
             double prev_car_y = car_y-sin(car_yaw);
             
@@ -543,7 +526,14 @@ int main() {
             
             ptsy.push_back(prev_car_y);
             ptsy.push_back(car_y);
+            
           } else {
+            
+            // enough previous path data is available
+            
+            car_s = end_path_s;
+            car_d = end_path_d;
+            
             ref[0] = previous_path_x[num_prev-1];
             ref[1] = previous_path_y[num_prev-1];
             
@@ -560,127 +550,161 @@ int main() {
             
           }
           
-          //set future waypoints
+          /*
+           Evaluate target lane every 2 sec
+           */
+          if (loop >= int(2/TS)) {
+            
+            /*
+             Update the road obstacles and behavior
+             */
+            double target_lane = behavior.target_lane;
+            lane.update(sensor_fusion, car_s, car_d, num_prev);
+            
+            // don't change lanes at very low speed
+            if (car_speed > 10*MPH2MPS) {
+              
+              behavior.update(lane, car_d);
+              
+            }
+
+            
+            if (target_lane != behavior.target_lane) {
+              std::cout << "Target lane = " << behavior.target_lane << std::endl;
+            }
+            
+            loop = 0;
+            
+          } else {
+            
+            ++loop;
+            
+          }
+          
+          /*
+           Set future waypoints
+           based on decided target lane
+           */
           double s_ahead = 30;
           vector<double> wp_next;
           
-          wp_next = getXY(car_s+1*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          wp_next = getXY(car_s+1*s_ahead, behavior.target_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
           ptsx.push_back(wp_next[0]);
           ptsy.push_back(wp_next[1]);
           
-          wp_next = getXY(car_s+2*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          wp_next = getXY(car_s+2*s_ahead, behavior.target_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
           ptsx.push_back(wp_next[0]);
           ptsy.push_back(wp_next[1]);
           
-          wp_next = getXY(car_s+3*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          wp_next = getXY(car_s+3*s_ahead, behavior.target_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
           ptsx.push_back(wp_next[0]);
           ptsy.push_back(wp_next[1]);
           
         
+          /*
+           Transform to car x, y coordinates from global x, y coordinates
+           */
           int num_spline = ptsx.size();
           
-          // transform to car x, y from global
           for (int i = 0; i < num_spline; ++i) {
+            
+            // shift backward
             double x_delta = ptsx[i] - ref[0];
             double y_delta = ptsy[i] - ref[1];
             
+            // rotate backward (negative yaw)
             ptsx[i] = x_delta*cos(0 - ref[2]) - y_delta*sin(0-ref[2]);
             ptsy[i] = x_delta*sin(0 - ref[2]) + y_delta*cos(0-ref[2]);
+            
           }
           
+          /*
+           Set trajectory using spline and look ahead points
+           */
           tk::spline trajectory;
           trajectory.set_points(ptsx, ptsy);
           
-          
-          static int loop;
-          static string behavior_old = "KL";
-          
-          if (loop >= int(0.5/TS)) {
-            loop = 0;
-            
-            int curr_lane;
-            // display current lane info
-            if ((car_d > 12) || (car_d < 0)) {
-              curr_lane = -1;
-              std::cout << "Not in a valid lane!" << std::endl;
-            } else if (car_d > 8) {
-              curr_lane = 0;
-              std::cout << "In right lane!" << std::endl;
-            } else if (car_d > 4) {
-              curr_lane = 1;
-              std::cout << "In center lane!" << std::endl;
-            } else {
-              curr_lane = 2;
-              std::cout << "In left lane!" << std::endl;
-            }
-            lane.update(sensor_fusion, car_s, car_d);
-            
-            
-            behavior.update(lane, car_d);
-            if (behavior_old != behavior.next) {
-              std::cout << "Change lanes!" << std::endl;
-              behavior_old = behavior.next;
-            }
-            
 
-          } else {
-            ++loop;
-            behavior_old = "KL";
-          }
+          /*
+           Find objects that are "nearby"
+           */
+          double follow_dist = car_speed*1.1;   // 1 second minimum follow distance + hysteresis band
+          vector<vector<double>> near_objs;     // list of nearby cars (irrespective of lane
+          int num_objs = sensor_fusion.size();  // all possible objects
           
-          
-          double follow_dist = car_speed*1.1; // 1 second minimum follow distance + hysteresis band
-          
-          vector<vector<double>> near_objs;
-          int num_objs = sensor_fusion.size();
           for (int i = 0; i < num_objs; ++i) {
-            // if objects are withing DIST_MAX meters, consider them "near"
-            double obj_x = sensor_fusion[i][SF.x];
-            double obj_y = sensor_fusion[i][SF.y];
-            double dst_x = car_x - obj_x;
-            double dst_y = car_y - obj_y;
-            double dst = sqrt((dst_x*dst_x + dst_y*dst_y));
+            
+            // if objects are withing follow distance (meters), consider them "near"
+            double obj_vx  = sensor_fusion[i][SF.vx];
+            double obj_vy  = sensor_fusion[i][SF.vy];
+            double obj_v = sqrt(obj_vx*obj_vx + obj_vy*obj_vy);
+            double obj_s = sensor_fusion[i][SF.s];
+            obj_s += obj_v*num_prev*TS;
+            
+            double dst = obj_s - car_s;
             if (dst < follow_dist) {
-              // push back is broken up in case additional fields are added
+              
               vector<double> obj;
               for (int j = 0; j < SF.size; j++) {
+                
                 obj.push_back(sensor_fusion[i][j]);
+                
               }
+              
               obj.push_back(dst);
               near_objs.push_back(obj);
+              
             }
           }
-          
 
-
-          
-          // follow the car in front
-          double car_v_s_des = V_MAX;
+          /*
+           Set the vehicle speed to follow the nearest object in the same lane
+           */
+          double car_v_s_des = V_MAX;    // desired speed without accounting for traffic
           
           for (int i = 0; i < near_objs.size(); ++i) {
-            double obj_x = near_objs[i][SF.x];
-            double obj_y = near_objs[i][SF.y];
-            vector<double> obj_frenet = getFrenet(obj_x, obj_y, car_yaw, map_waypoints_x, map_waypoints_y);
-            double obj_s = obj_frenet[0];
-            double obj_d = obj_frenet[1];
+            
+            // set the desired to the minimum of
+            // nearby vehicles in front of the car
+            double obj_vx  = near_objs[i][SF.vx];
+            double obj_vy  = near_objs[i][SF.vy];
+            double obj_v = sqrt(obj_vx*obj_vx + obj_vy*obj_vy);
+            double obj_s = near_objs[i][SF.s] + obj_v*num_prev*TS;
+            double obj_d = near_objs[i][SF.d];
+
             if (obj_s - car_s > 0) {
+              
+              // current object is ahead of the ego vehicle in s direction
+              
               if (fabs(car_d - obj_d) < 2) {
-                double obj_v_s = (obj_s - car_s)/1.0; // 1 second following distance
-                if (obj_v_s < car_v_s_des) {
-                  car_v_s_des = obj_v_s;
-                }
-                //std::cout << "Follow car #" << near_objs[i][SF.id] << " at " << double(int(10*vel/MPH2MPS))/10 << "MPH" << std::endl;
+                
+                // current object is within 1/2 lane width
+                
+                double obj_v_s = (obj_s - car_s)/1.0; // desired spee to achieve 1 second following distance
+                car_v_s_des = (obj_v_s < car_v_s_des) ? obj_v_s : car_v_s_des; // minimum speed for all blocking objects
+
               }
             }
           }
           
+          /*
+           Acceleration handling
+           only allow 1 m/sec change per loop
+           */
           double car_speed_next;
+          
           if ((car_speed + 1) < car_v_s_des) {
+            
             car_speed_next = car_speed + 1;
+            
           } else if ((car_speed - 1) > car_v_s_des) {
+            
             car_speed_next = car_speed - 1;
+            
           } else {
+            
             car_speed_next = car_speed;
+            
           }
           
           json msgJson;
@@ -688,19 +712,29 @@ int main() {
           vector<double> next_x_vals;
           vector<double> next_y_vals;
           
+          /*
+           Push back previous values
+           */
           for(int i = 0; i < num_prev; i++)
           {
-              // push back previous values
+
               next_x_vals.push_back(previous_path_x[i]);
               next_y_vals.push_back(previous_path_y[i]);
+            
           }
           
-          // use follow velocity from above
-          double x_des = car_v_s_des;
+          /*
+           Break velocity up into orthogonal components to not exceed speed limit
+           */
+          double x_des = car_v_s_des; //30;
           double y_des = trajectory(x_des);
           double dist = sqrt(x_des*x_des + y_des*y_des);
           
+          /*
+           Fill in remaining points of trajectory
+           */
           int num_remain = N_TRAJ_PTS - num_prev;
+          
           for (int i = 1; i < num_remain; ++i) {
             
             double N = dist/(TS*car_speed_next);
@@ -724,11 +758,10 @@ int main() {
           msgJson["next_x"] = next_x_vals;
           msgJson["next_y"] = next_y_vals;
           
-
-          	auto msg = "42[\"control\","+ msgJson.dump()+"]";
-
-          	//this_thread::sleep_for(chrono::milliseconds(1000));
-          	ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
+          auto msg = "42[\"control\","+ msgJson.dump()+"]";
+          
+          //this_thread::sleep_for(chrono::milliseconds(1000));
+          ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
           
         }
       } else {
