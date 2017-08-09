@@ -166,7 +166,7 @@ void Behavior::update(Lane lane, double car_d) {
    cost[1] = cost to increase lane (shift right)
    cost[2] = cost to decrease lane (shift left)
    */
-  vector<double> cost = {0,0.1,0.1}; // biased against lane change
+  vector<double> cost = {0,0.15,0.15}; // biased against lane change
 
   /*
    Identify current lane
@@ -658,7 +658,7 @@ int main() {
           /*
            Find objects that are "nearby"
            */
-          double follow_dist = car_speed*1.1;   // 1 second minimum follow distance + hysteresis band
+          double follow_dist = car_speed*1.25;   // 1 second minimum follow distance + hysteresis band
           vector<vector<double>> near_objs;     // list of nearby cars (irrespective of lane
           int num_objs = sensor_fusion.size();  // all possible objects
           
@@ -710,8 +710,7 @@ int main() {
                 
                 // current object is within 1/2 lane width
                 
-                double obj_v_s = (obj_s - car_s)/1.0; // desired spee to achieve 1 second following distance
-                car_v_s_des = (obj_v_s < car_v_s_des) ? obj_v_s : car_v_s_des; // minimum speed for all blocking objects
+                car_v_s_des = obj_v < car_v_s_des ? obj_v : car_v_s_des; // minimum speed for all blocking objects
 
               }
             }
@@ -722,7 +721,7 @@ int main() {
            only allow 1 m/sec change per loop
            */
           double car_speed_next;
-          double speed_inc = 0.5;
+          double speed_inc = 1;
           
           if ((car_speed + speed_inc) < car_v_s_des) {
             
