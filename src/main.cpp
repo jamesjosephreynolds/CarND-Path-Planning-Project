@@ -25,7 +25,7 @@ double rad2deg(double x) { return x * 180 / pi(); }
 #define MPH2MPS 0.44704                 // miles per hour to meters per second
 const double TS = 0.02;                // software timestep seconds
 const int N_TRAJ_PTS = int(1/TS);      // corresponds to 1 second time horizon
-const double V_MAX_MPH = 47.5;            // miles per hour
+const double V_MAX_MPH = 49;            // miles per hour
 double V_MAX= V_MAX_MPH * MPH2MPS; // meters per second
 double A_MAX = 0.01;                  // meters per second per second per loop
 double J_MAX = 0.01;                  // meters per second per second
@@ -453,7 +453,7 @@ int main() {
    */
   
   int num_upsampled_waypoints = int(max_s*2); // place a waypoint every 0.5m
-  
+  /*
   tk::spline upsample_waypoints_s_x;
   tk::spline upsample_waypoints_s_y;
   tk::spline upsample_waypoints_s_dx;
@@ -477,9 +477,9 @@ int main() {
     upsample_waypoints_dx.push_back(upsample_waypoints_s_dx(upsample_s));
     upsample_waypoints_dy.push_back(upsample_waypoints_s_dy(upsample_s));
     upsample_waypoints_s.push_back(upsample_s);
-  }
+  }*/
   
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&upsample_waypoints_dx,&map_waypoints_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy,&lane,&behavior](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -552,22 +552,30 @@ int main() {
             double ref_yaw_prev = atan2(ref[1]-ref_prev[1], ref[0]-ref_prev[0]);
             ref_prev[2] = ref_yaw_prev;
             
-            //set future waypoints
-            double s_ahead = 30;
-            vector<double> wp_next;
+            ptsx.push_back(ref_prev[0]);
+            ptsx.push_back(ref[0]);
             
-            wp_next = getXY(car_s+1*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            ptsx.push_back(wp_next[0]);
-            ptsy.push_back(wp_next[1]);
+            ptsy.push_back(ref_prev[1]);
+            ptsy.push_back(ref[1]);
             
-            wp_next = getXY(car_s+2*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            ptsx.push_back(wp_next[0]);
-            ptsy.push_back(wp_next[1]);
-            
-            wp_next = getXY(car_s+3*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
-            ptsx.push_back(wp_next[0]);
-            ptsy.push_back(wp_next[1]);
           }
+          
+          //set future waypoints
+          double s_ahead = 30;
+          vector<double> wp_next;
+          
+          wp_next = getXY(car_s+1*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          ptsx.push_back(wp_next[0]);
+          ptsy.push_back(wp_next[1]);
+          
+          wp_next = getXY(car_s+2*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          ptsx.push_back(wp_next[0]);
+          ptsy.push_back(wp_next[1]);
+          
+          wp_next = getXY(car_s+3*s_ahead, tgt_lane, map_waypoints_s, map_waypoints_x, map_waypoints_y);
+          ptsx.push_back(wp_next[0]);
+          ptsy.push_back(wp_next[1]);
+          
         
           int num_spline = ptsx.size();
           
@@ -666,6 +674,15 @@ int main() {
             }
           }
           
+          double car_speed_next;
+          if ((car_speed + 1) < car_v_s_des) {
+            car_speed_next = car_speed + 1;
+          } else if ((car_speed - 1) > car_v_s_des) {
+            car_speed_next = car_speed - 1;
+          } else {
+            car_speed_next = car_speed;
+          }
+          
           json msgJson;
           
           vector<double> next_x_vals;
@@ -686,7 +703,7 @@ int main() {
           int num_remain = N_TRAJ_PTS - num_prev;
           for (int i = 1; i < num_remain; ++i) {
             
-            double N = dist/(TS*car_v_s_des);
+            double N = dist/(TS*car_speed_next);
             double x_new = i*x_des/N;
             double y_new = trajectory(x_new);
             
