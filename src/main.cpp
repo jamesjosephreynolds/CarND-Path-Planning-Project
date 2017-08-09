@@ -24,7 +24,7 @@ double rad2deg(double x) { return x * 180 / pi(); }
 /* Custom variables */
 #define MPH2MPS 0.44704                 // miles per hour to meters per second
 const double TS = 0.02;                // software timestep seconds
-const int N_TRAJ_PTS = int(1/TS);      // corresponds to 1 second time horizon
+const int N_TRAJ_PTS = int(1/TS);      // corresponds to 400 msec time horizon
 const double V_MAX_MPH = 49;            // miles per hour
 double V_MAX= V_MAX_MPH * MPH2MPS; // meters per second
 
@@ -52,6 +52,7 @@ public:
   vector<string> status;        // text description of the lane status
   vector<vector<double>> lines; // an array of pairs, containing lane borders in 'd' coordinates
   vector<double> speed;         // maximum speed of each lane
+  vector<double> distance;      // how far to the next vehicle forward
   void init(int dimension, double lane_width);
   void update(vector<vector<double>> sf, double s_ego, double d_ego, int N);
   Lane();
@@ -76,6 +77,7 @@ void Lane::init(int dimension, double lane_width){
     lr_boundary.push_back(right);           // right boundard for ith lane
     this->lines.push_back(lr_boundary);     // boundaries for ith lane
     this->speed.push_back(99*MPH2MPS);      // maximum speed for ith lane
+    this->distance.push_back(10000);
     
   }
   
@@ -93,7 +95,7 @@ void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego, int N){
     this->status[i] = "open";
     this->speed[i] = 99*MPH2MPS;
     
-    double nearest = 999999;
+    double nearest = 200;
     
     // check each lane for nearby vehicles
     int num_objs = sf.size();
@@ -115,17 +117,20 @@ void Lane::update(vector<vector<double>> sf, double s_ego, double d_ego, int N){
           double s = sf[j][SF.s];
           s += v*TS*N;
           
-          if (fabs(s - s_ego) < 20) { // 3 car lengths between
+          if (fabs(s - s_ego) < 10) {
 		  
 	          // the ith lane is blocked, no possiblity to switch here
             this->status[i] = "blocked";
             nearest = -999999;
             this->speed[i] = 0;
+            this->distance[i] = 0;
             
-          } else if (((sf[j][SF.s] - s_ego) < nearest) && ((sf[j][SF.s] - s_ego) > 0)) {
+          } else if ((fabs(s - s_ego) < nearest) && ((s - s_ego) > 0)) {
 		  
 	          // the ith lane has a vehicle somewhere on the horizon, but not immediately in the way
-            this->speed[i] = sqrt(sf[j][SF.vx]*sf[j][SF.vx] + sf[j][SF.vy]*sf[j][SF.vy]);
+            this->speed[i] = v;
+            this->distance[i] = s - s_ego;
+            nearest = s - s_ego;
             
           }
         }
@@ -161,7 +166,7 @@ void Behavior::update(Lane lane, double car_d) {
    cost[1] = cost to increase lane (shift right)
    cost[2] = cost to decrease lane (shift left)
    */
-  vector<double> cost = {0,0.03,0.03}; // biased against lane change
+  vector<double> cost = {0,0.1,0.1}; // biased against lane change
 
   /*
    Identify current lane
@@ -209,23 +214,30 @@ void Behavior::update(Lane lane, double car_d) {
   } else {
     
     double loc_cost = 999;
-    
-    for (int i = 1; i <= num_lanes_right; ++i) {
-      
-      double sub_cost;
-      sub_cost = (V_MAX - lane.speed[curr_lane+i])/V_MAX;
-      sub_cost = fmax(sub_cost, 0.0);
-      loc_cost = fmin(loc_cost, sub_cost);
-      
+    double speed_cost;
+    double dist_cost;
+    if (lane.speed[curr_lane+1] > V_MAX) {
+      speed_cost = 0;
+    } else {
+      speed_cost = (V_MAX - lane.speed[curr_lane+1])/(2*V_MAX);
     }
     
+    if ((lane.distance[curr_lane+1] > 100) || (lane.distance[curr_lane+1] <= 0)) {
+      dist_cost = 0;
+    } else {
+      dist_cost = (100 - lane.distance[curr_lane+1])/200;
+    }
+    double sub_cost = speed_cost + dist_cost;
+    sub_cost = fmax(sub_cost, 0.0);
+    loc_cost = fmin(loc_cost, sub_cost);
+
     cost[1] += loc_cost;
     
   }
 	
   if (num_lanes_left == 0) {
     
-    // efltt shift not possible (no lane exists)
+    // left shift not possible (no lane exists)
 	  cost[2] = 999;
     
   } else if (lane.status[curr_lane-1] == "blocked") {
@@ -236,20 +248,38 @@ void Behavior::update(Lane lane, double car_d) {
   } else {
     
     double loc_cost = 999;
-    
-    for (int i = 1; i <= num_lanes_left; ++i) {
-      
-      double sub_cost;
-      sub_cost = (V_MAX - lane.speed[curr_lane-i])/V_MAX;
-      sub_cost = fmax(sub_cost, 0.0);
-      loc_cost = fmin(loc_cost, sub_cost);
+    double speed_cost;
+    double dist_cost;
+    if (lane.speed[curr_lane-1] > V_MAX) {
+      speed_cost = 0;
+    } else {
+      speed_cost = (V_MAX - lane.speed[curr_lane-1])/(2*V_MAX);
     }
+    
+    if ((lane.distance[curr_lane-1] > 100) || (lane.distance[curr_lane-1] <= 0)) {
+      dist_cost = 0;
+    } else {
+      dist_cost = (100 - lane.distance[curr_lane-1])/200;
+    }
+    
+    double sub_cost = speed_cost + dist_cost;
+    sub_cost = fmax(sub_cost, 0.0);
+    loc_cost = fmin(loc_cost, sub_cost);
     
     cost[2] += loc_cost;
     
   }
-	  
-  cost[0] +=  fmax(0.0, (V_MAX - lane.speed[curr_lane]))/V_MAX;
+  
+  if (lane.distance[curr_lane] <= 100) {
+    cost[0] += fmax(0.0, (100 - lane.distance[curr_lane])/200);
+  }
+  if (lane.speed[curr_lane] <= V_MAX) {
+    cost[0] += fmax(0.0, (V_MAX - lane.speed[curr_lane]))/(2*V_MAX);
+  }
+  
+  std::cout << "keep cost " << cost[0] << ", ";
+  std::cout << "left cost " << cost[2] << ", ";
+  std::cout << "right cost " << cost[1] << std::endl;
   
   if ((cost[1] < cost[2]) && (cost[1] < cost[0])) {
     
@@ -692,14 +722,15 @@ int main() {
            only allow 1 m/sec change per loop
            */
           double car_speed_next;
+          double speed_inc = 0.5;
           
-          if ((car_speed + 1) < car_v_s_des) {
+          if ((car_speed + speed_inc) < car_v_s_des) {
             
-            car_speed_next = car_speed + 1;
+            car_speed_next = car_speed + speed_inc;
             
-          } else if ((car_speed - 1) > car_v_s_des) {
+          } else if ((car_speed - speed_inc) > car_v_s_des) {
             
-            car_speed_next = car_speed - 1;
+            car_speed_next = car_speed - speed_inc;
             
           } else {
             
